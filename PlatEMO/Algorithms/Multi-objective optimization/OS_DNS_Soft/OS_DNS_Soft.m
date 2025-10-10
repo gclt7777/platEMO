@@ -1,516 +1,451 @@
 classdef OS_DNS_Soft < ALGORITHM
 % <multi> <real/integer> <large/none>
-% OS_DNS_Soft  Soft-teacher driven target-space search with adaptive control
+% OS_DNS_Soft  Target-space autoencoder search with latent variation
 %
-% 该版本根据《OS_DNS_Soft 收敛性分析》与《OS_DNS_Soft 后续改进建议》重写，
-% 在目标空间执行“好解/坏解”分层、参考向量引导的软教师学习、网格拥挤
-% 控制与动态重启，再结合线性+局部映射回到决策空间并进行环境选择。
+% 本版本按照用户提出的“重新从头开始”思路实现：
+%   1) 在目标空间中分别训练线性与非线性的自动编码器；
+%   2) 在两个低维潜空间中对好解执行差分/突变，对坏解执行“向好解学习”；
+%   3) 将线性/非线性自动编码器解码得到的新目标解混合；
+%   4) 通过全局线性映射 + 局部邻域回归把目标解映射回决策空间，并保留精英用于
+%      环境选择。
+%
+% 线性自动编码器使用 PCA 主成分作为编码/解码矩阵，非线性自动编码器使用带有
+% tanh 激活的一层隐藏层，通过简单的批梯度下降训练。为了避免训练数据不足引起
+% 的数值问题，当好解数量很少时自动退化为线性模型。映射阶段提供岭回归学习的
+% 全局线性映射与 k 近邻的局部映射，并在两者之间进行线性插值。
 
     methods
         function main(Algorithm,Problem)
-            %% 参数
-            [alpha,beta,lambdaT,updateFreq,reuseT, ...
-             epsRate,kNeighbor,sigmaScale,tauCheby,useRef,envMode, ...
-             kLocal,localMix,diversityRate,refAdaptFreq,restartRate,gridDiv] = ...
-             Algorithm.ParameterSet(0.35,0.15,1e-6,1,false, ...
-                                    0.02,10,1.0,0.5,1,1, ...
-                                    8,0.5,0.15,10,0.15,8);
+            %% 参数配置
+            [latentRatio,latentMinDim,mixWeight,goodStep,badStep, ...
+             noiseScale,mutationScale,eliteKeep,mapLambda,mapUpdateFreq, ...
+             reuseMapping,kLocal,localMix,localSigma] = ...
+                Algorithm.ParameterSet(0.5,2,0.5,0.6,0.35, ...
+                                        0.01,0.1,0.1,1e-6,5, ...
+                                        1,6,0.4,0.5);
 
-            %% 初始化
+            reuseMapping = reuseMapping ~= 0;
+            latentRatio   = max(0.05,min(latentRatio,1));
+            mixWeight     = max(0,min(mixWeight,1));
+            goodStep      = max(0,goodStep);
+            badStep       = max(0,badStep);
+            noiseScale    = max(0,noiseScale);
+            mutationScale = max(0,mutationScale);
+            eliteKeep     = max(0,min(eliteKeep,0.5));
+            kLocal        = max(0,round(kLocal));
+            localMix      = max(0,min(localMix,1));
+            localSigma    = max(1e-8,localSigma);
+
+            %% 初始化种群
             Population = Problem.Initialization();
             N  = Problem.N;
             lb = Problem.lower;
             ub = Problem.upper;
 
-            Y = Population.objs;
-            X = Population.decs;
-
-            T = [];
-            Ymean = [];
-            Ystd  = [];
-
-            if useRef
-                [RefBase,~] = UniformPoint(max(N,Problem.M),Problem.M);
-                RefVec = RefBase;
-            else
-                RefBase = [];
-                RefVec  = [];
-            end
-            sectorID = ones(size(Y,1),1);
-            gen = 1;
+            %% 映射器缓存
+            T      = [];
+            Ymean  = [];
+            Ystd   = [];
+            mapGen = 0;
 
             %% 主循环
             while Algorithm.NotTerminated(Population)
-                % 1) 区分好解与坏解
-                [goodMask,badMask] = OS_DNS_Soft.classify_population(Y,N);
-
-                % 2) 自适应参考向量与扇区划分
-                if useRef
-                    [RefVec,sectorID] = OS_DNS_Soft.adapt_reference_vectors(Y, goodMask, RefVec, RefBase, gen, refAdaptFreq);
-                else
-                    RefVec  = [];
-                    sectorID = ones(size(Y,1),1);
-                end
-
-                % 3) 计算网格拥挤度，构造软教师
-                zmin = min(Y,[],1);
-                gridInfo = OS_DNS_Soft.compute_grid_info(Y, gridDiv);
-                Yteacher = OS_DNS_Soft.build_soft_teachers(Y, goodMask, badMask, sectorID, RefVec, ...
-                    zmin, gridInfo, epsRate, kNeighbor, sigmaScale, tauCheby);
-
-                % 4) 目标空间松弛（好解/坏解不同步长）
-                Ynew = OS_DNS_Soft.relax_population(Y,Yteacher,zmin,goodMask,alpha,beta);
-
-                % 5) 线性映射与局部映射混合
-                if gen==1 || (~reuseT && mod(gen-1,updateFreq)==0)
-                    [T,Ymean,Ystd] = OS_DNS_Soft.learn_linear_mapping(Y,X,lambdaT);
-                elseif reuseT && isempty(T)
-                    [T,Ymean,Ystd] = OS_DNS_Soft.learn_linear_mapping(Y,X,lambdaT);
-                end
-                Xlinear = OS_DNS_Soft.map_linear(Ynew,T,Ymean,Ystd,lb,ub);
-
-                if kLocal > 0 && localMix > 0
-                    Xlocal  = OS_DNS_Soft.map_local(Ynew,Y,X,kLocal,lb,ub);
-                    mixRatio = min(max(localMix,0),1);
-                    Xnew = (1-mixRatio).*Xlinear + mixRatio.*Xlocal;
-                else
-                    Xnew = Xlinear;
-                end
-
-                % 6) 拥挤坏解动态重启
-                if restartRate > 0
-                    Xnew = OS_DNS_Soft.restart_bad_solutions(Xnew,X,goodMask,gridInfo,restartRate,lb,ub);
-                end
-
-                % 7) 多样化注入（GA 变异）
-                if diversityRate > 0 && size(X,1) > 1
-                    Xnew = OS_DNS_Soft.inject_diversity(Xnew,X,diversityRate,Problem);
-                end
-
-                % 8) 评估 + 环境选择
-                Offspring = Problem.Evaluation(Xnew);
-                PopAll    = [Population,Offspring];
-
-                switch envMode
-                    case 1
-                        Population = env_select_hype(PopAll,N);
-                    case 2
-                        theta = 1;
-                        if isprop(Algorithm,'FE') && isprop(Problem,'maxFE') && Problem.maxFE > 0
-                            theta = min(2,max(0.5,2*(Algorithm.FE/Problem.maxFE)));
-                        end
-                        Population = env_select_rvea(PopAll,N,theta);
-                    otherwise
-                        Population = OS_DNS_Soft.env_select_nsga2(PopAll,N);
-                end
-
                 Y = Population.objs;
                 X = Population.decs;
-                gen = gen + 1;
+
+                %% Step 1: 好解/坏解划分
+                [goodMask,~] = OS_DNS_Soft.classify_population(Y,N);
+                if ~any(goodMask)
+                    % 至少保留一个好解
+                    [~,bestIdx] = min(sum(Y.^2,2));
+                    goodMask(bestIdx) = true;
+                end
+                badMask = ~goodMask;
+
+                %% Step 2: 训练线性与非线性自动编码器
+                goodY = Y(goodMask,:);
+                if size(goodY,1) < 2
+                    goodY = Y;
+                end
+                latentDim = max(latentMinDim,round(latentRatio*size(Y,2)));
+                latentDim = min(latentDim,size(goodY,2));
+                [linAE,linReady] = OS_DNS_Soft.train_linear_autoencoder(goodY,latentDim);
+                [nonlinAE,nonlinReady] = OS_DNS_Soft.train_nonlinear_autoencoder(goodY,latentDim);
+                if ~nonlinReady
+                    % 回退到线性模型
+                    nonlinAE = OS_DNS_Soft.wrap_linear_as_nonlinear(linAE);
+                end
+
+                %% Step 3: 在潜空间生成目标空间新解
+                Ynew = OS_DNS_Soft.generate_target_offspring(Y,goodMask,linAE,nonlinAE, ...
+                    mixWeight,goodStep,badStep,mutationScale,noiseScale,eliteKeep);
+
+                %% Step 4: 目标空间 -> 决策空间映射
+                if isempty(T) || (~reuseMapping) || (mapGen >= mapUpdateFreq)
+                    [T,Ymean,Ystd] = OS_DNS_Soft.learn_linear_mapping(Y,X,mapLambda);
+                    mapGen = 0;
+                end
+                mapGen = mapGen + 1;
+
+                Xlinear = OS_DNS_Soft.map_linear(Ynew,T,Ymean,Ystd,lb,ub);
+                if kLocal > 0 && localMix > 0 && size(Y,1) > 1
+                    Xlocal = OS_DNS_Soft.map_local(Ynew,Y,X,kLocal,localSigma,lb,ub);
+                    Xnew   = (1-localMix).*Xlinear + localMix.*Xlocal;
+                else
+                    Xnew   = Xlinear;
+                end
+
+                %% Step 5: 评估 + 环境选择
+                Offspring = Problem.Evaluation(Xnew);
+                Population = OS_DNS_Soft.env_select_nsga2([Population,Offspring],N);
             end
         end
     end
 
-    %% ===== 静态辅助函数 =====
     methods (Static, Access = private)
+        %% --- 人口分类 ---
         function [goodMask,badMask] = classify_population(Y,N)
             [FrontNo,MaxFNo] = NDSort(Y,N);
-            goodMask = FrontNo==1;
+            goodMask = FrontNo == 1;
             if sum(goodMask) < max(2,ceil(0.2*size(Y,1)))
                 goodMask = FrontNo <= min(MaxFNo,2);
-            end
-            if ~any(goodMask)
-                [~,best] = min(sum(Y,2));
-                goodMask(best) = true;
             end
             badMask = ~goodMask;
         end
 
-        function [RefVec,sectorID] = adapt_reference_vectors(Y,goodMask,RefVec,RefBase,gen,adaptFreq)
-            if isempty(RefBase)
-                RefVec = [];
-                sectorID = ones(size(Y,1),1);
+        %% --- 线性自动编码器 (PCA) ---
+        function [model,ready] = train_linear_autoencoder(Y,latentDim)
+            model = [];
+            ready = false;
+            if isempty(Y)
                 return;
             end
-            if isempty(RefVec)
-                RefVec = RefBase;
-            end
-            freq = max(1,round(adaptFreq));
-            if gen==1 || mod(gen-1,freq)==0
-                refSource = Y(goodMask,:);
-                if size(refSource,1) < size(Y,2)
-                    refSource = Y;
-                end
-                try
-                    RefVec = ReferenceVectorAdaptation(refSource, RefBase);
-                catch
-                    RefVec = RefBase;
-                end
-            end
-
-            norms = sqrt(sum(RefVec.^2,2));
-            norms(norms<1e-12) = 1;
-            RefNorm = RefVec ./ norms;
-
-            Yshift = Y - min(Y,[],1);
-            denom  = max(max(Y,[],1)-min(Y,[],1), 1e-12);
-            Yn = Yshift ./ denom;
-            YnNorm = sqrt(sum(Yn.^2,2));
-            YnNorm(YnNorm<1e-12) = 1;
-            YnDir = Yn ./ YnNorm;
-
-            sim = YnDir * RefNorm';
-            [~,sectorID] = max(sim,[],2);
-            sectorID(~isfinite(sectorID)) = 1;
-        end
-
-        function gridInfo = compute_grid_info(Y,gridDiv)
-            if nargin < 2 || gridDiv < 2
-                gridDiv = 8;
-            end
-            Ymin = min(Y,[],1);
-            Yrange = max(max(Y,[],1) - Ymin, 1e-12);
-            Yn = (Y - Ymin) ./ Yrange;
-            Yn = min(max(Yn,0),1);
-
-            bins = min(gridDiv-1, floor(Yn .* gridDiv));
-            coeff = gridDiv.^((0:size(Y,2)-1));
-            cellID = bins * coeff' + 1;
-            maxID = max(cellID);
-            if isempty(maxID) || maxID < 1
-                crowd = ones(size(cellID));
+            [n,m] = size(Y);
+            latentDim = max(1,min(latentDim,min(n,m)));
+            mu = mean(Y,1);
+            Yc = Y - mu;
+            C = (Yc' * Yc) / max(1,n-1);
+            if latentDim >= m
+                [Vall,Val] = eig((C+C')/2);
+                [~,order] = sort(diag(Val),'descend');
+                V = Vall(:,order(1:latentDim));
             else
-                counts = accumarray(cellID,1,[maxID,1]);
-                crowd = counts(cellID);
+                [V,~] = eigs((C+C')/2,latentDim,'largestreal','Tolerance',1e-6,'SubspaceDimension',max(latentDim+2,5));
             end
-
-            gridInfo.Yn      = Yn;
-            gridInfo.cellID  = cellID;
-            gridInfo.crowd   = crowd;
-            gridInfo.Ymin    = Ymin;
-            gridInfo.Yrange  = Yrange;
+            model.type = 'linear';
+            model.mean = mu;
+            model.proj = V;
+            ready = true;
         end
 
-        function Yteacher = build_soft_teachers(Y,goodMask,badMask,sectorID,RefVec,zmin,gridInfo,epsRate,kNeighbor,sigmaScale,tauCheby)
-            Yn = gridInfo.Yn;
-            epsVec = epsRate .* gridInfo.Yrange;
-
-            goodIdx = find(goodMask);
-            badIdx  = find(badMask);
-            Yteacher = Y;
-
-            if isempty(goodIdx)
-                goodIdx = (1:size(Y,1))';
-            end
-
-            RefNorm = [];
-            if ~isempty(RefVec)
-                RefNorm = RefVec ./ max(1e-12,sqrt(sum(RefVec.^2,2)));
-            end
-
-            % 好解向理想点或扇区代表靠拢
-            tauGood = min(max(tauCheby,0),0.6);
-            sectorBest = OS_DNS_Soft.pick_sector_elites(Y,Yn,goodIdx,sectorID,RefNorm,tauCheby);
-            for i = 1:numel(goodIdx)
-                idx = goodIdx(i);
-                target = zmin;
-                if ~isempty(sectorBest)
-                    sec = sectorID(idx);
-                    if sec <= numel(sectorBest) && sectorBest(sec) > 0
-                        target = Y(sectorBest(sec),:);
-                    end
-                end
-                Yteacher(idx,:) = (1-tauGood)*Y(idx,:) + tauGood*target;
-            end
-
-            if isempty(badIdx)
+        %% --- 非线性自动编码器 (单隐层) ---
+        function [model,ready] = train_nonlinear_autoencoder(Y,latentDim)
+            model = [];
+            ready = false;
+            [n,m] = size(Y);
+            if n < max(5,latentDim)
                 return;
             end
+            latentDim = max(1,min(latentDim,m));
+            mu = mean(Y,1);
+            Yc = Y - mu;
+            % 初始化参数
+            rngState = rng('shuffle'); %#ok<NASGU>
+            Wenc = 0.1*randn(m,latentDim);
+            benc = zeros(1,latentDim);
+            Wdec = 0.1*randn(latentDim,m);
+            bdec = zeros(1,m);
+            lr = 0.01;
+            weightDecay = 1e-4;
+            maxIter = min(200,20*n);
+            batchSize = min(64,n);
+            for iter = 1:maxIter
+                idx = randperm(n,batchSize);
+                Ybatch = Yc(idx,:);
+                Z = tanh(Ybatch*Wenc + benc);
+                Yhat = Z*Wdec + bdec;
+                Err = Yhat - Ybatch;
+                gradWdec = (Z' * Err)/batchSize + weightDecay*Wdec;
+                gradBdec = mean(Err,1);
+                dZ = (Err * Wdec') .* (1 - Z.^2);
+                gradWenc = (Ybatch' * dZ)/batchSize + weightDecay*Wenc;
+                gradBenc = mean(dZ,1);
 
-            try
-                dist = pdist2(Yn(badIdx,:),Yn(goodIdx,:));
-            catch
-                dist = sqrt(max(0,sum(Yn(badIdx,:).^2,2) + sum(Yn(goodIdx,:).^2,2)' - 2*(Yn(badIdx,:)*Yn(goodIdx,:)')));
+                Wdec = Wdec - lr*gradWdec;
+                bdec = bdec - lr*gradBdec;
+                Wenc = Wenc - lr*gradWenc;
+                benc = benc - lr*gradBenc;
+
+                if iter > 20 && mod(iter,20) == 0
+                    lr = lr * 0.9;
+                end
             end
-            if isempty(dist)
-                dist = zeros(numel(badIdx),numel(goodIdx));
-            end
-            sigBase = median(dist(dist>0));
-            if ~isfinite(sigBase) || sigBase <= 0
-                sigBase = 1;
-            end
-
-            for ii = 1:numel(badIdx)
-                idx = badIdx(ii);
-                yi  = Y(idx,:);
-
-                domMask = all(bsxfun(@le,Y(goodIdx,:),yi + epsVec + 1e-9),2) & ...
-                          any(bsxfun(@lt,Y(goodIdx,:),yi - epsVec - 1e-9),2);
-                cand = goodIdx(domMask);
-
-                if isempty(cand) && ~isempty(sectorBest)
-                    sec = sectorID(idx);
-                    if sec <= numel(sectorBest) && sectorBest(sec) > 0
-                        cand = sectorBest(sec);
-                    end
-                end
-
-                if isempty(cand)
-                    [~,ord] = sort(dist(ii,:),'ascend');
-                    kn = min(kNeighbor,length(ord));
-                    cand = goodIdx(ord(1:kn));
-                end
-
-                cand = cand(:);
-                if isempty(cand)
-                    cand = goodIdx(randi(numel(goodIdx)));
-                end
-
-                candY = Y(cand,:);
-                weights = ones(numel(cand),1);
-                if numel(cand) > 1
-                    d = sqrt(sum((Yn(cand,:) - Yn(idx,:)).^2,2));
-                    sigma = max(sigmaScale*sigBase,1e-9);
-                    weights = exp(-d.^2./(2*sigma^2));
-                    crowdW  = 1 ./ max(1,gridInfo.crowd(cand));
-                    weights = weights .* crowdW;
-                    if ~isempty(RefNorm)
-                        sec = sectorID(idx);
-                        ref = RefNorm(max(1,min(sec,size(RefNorm,1))),:);
-                        cheby = max(bsxfun(@rdivide,Yn(cand,:),max(ref,1e-6)),[],2);
-                        weights = weights .* exp(-tauCheby*cheby);
-                    end
-                end
-
-                if all(weights<=0)
-                    weights = ones(size(weights));
-                end
-                weights = weights ./ sum(weights);
-                Yteacher(idx,:) = weights' * candY;
-            end
+            model.type = 'nonlinear';
+            model.mean = mu;
+            model.Wenc = Wenc;
+            model.benc = benc;
+            model.Wdec = Wdec;
+            model.bdec = bdec;
+            ready = true;
         end
 
-        function sectorBest = pick_sector_elites(Y,Yn,goodIdx,sectorID,RefNorm,tauCheby)
-            if isempty(RefNorm)
-                sectorBest = [];
+        function model = wrap_linear_as_nonlinear(linModel)
+            model.type = 'nonlinear';
+            model.mean = linModel.mean;
+            model.Wenc = linModel.proj;
+            model.benc = zeros(1,size(linModel.proj,2));
+            model.Wdec = linModel.proj';
+            model.bdec = zeros(1,size(linModel.proj,1));
+        end
+
+        %% --- 编码/解码工具 ---
+        function Z = encode_linear(Y,model)
+            if isempty(model)
+                Z = Y;
                 return;
             end
-            R = size(RefNorm,1);
-            sectorBest = zeros(R,1);
-            for r = 1:R
-                cand = goodIdx(sectorID(goodIdx)==r);
-                if isempty(cand)
-                    cand = goodIdx;
-                end
-                if isempty(cand)
-                    continue;
-                end
-                ref = max(RefNorm(r,:),1e-6);
-                cheby = max(bsxfun(@rdivide,Yn(cand,:),ref),[],2);
-                bias  = tauCheby * sum(Yn(cand,:),2);
-                [~,bestIdx] = min(cheby + bias);
-                sectorBest(r) = cand(bestIdx);
-            end
+            Yc = Y - model.mean;
+            Z = Yc * model.proj;
         end
 
-        function Ynew = relax_population(Y,Yteacher,zmin,goodMask,alpha,beta)
-            N = size(Y,1);
+        function Yrec = decode_linear(Z,model)
+            if isempty(model)
+                Yrec = Z;
+                return;
+            end
+            Yrec = Z * model.proj' + model.mean;
+        end
+
+        function Z = encode_nonlinear(Y,model)
+            if isempty(model)
+                Z = Y;
+                return;
+            end
+            Yc = Y - model.mean;
+            Z = tanh(Yc * model.Wenc + model.benc);
+        end
+
+        function Yrec = decode_nonlinear(Z,model)
+            if isempty(model)
+                Yrec = Z;
+                return;
+            end
+            Yrec = Z * model.Wdec + model.bdec + model.mean;
+        end
+
+        %% --- 在潜空间生成新目标解 ---
+        function Ynew = generate_target_offspring(Y,goodMask,linAE,nonlinAE,mixWeight, ...
+                goodStep,badStep,mutationScale,noiseScale,eliteKeep)
+            n = size(Y,1);
             M = size(Y,2);
+            Ynew = Y;
+            idxGood = find(goodMask);
+            idxBad  = find(~goodMask);
+            numGood = numel(idxGood);
+            numBad  = numel(idxBad);
 
-            alphaGood = 0.6 * alpha;
-            alphaBad  = 1.2 * alpha;
-            betaGood  = 0.5 * beta;
-            betaBad   = 1.5 * beta;
-
-            alphaVec = alphaBad * ones(N,1);
-            alphaVec(goodMask) = alphaGood;
-            betaVec = betaBad * ones(N,1);
-            betaVec(goodMask) = betaGood;
-
-            alphaMat = repmat(alphaVec,1,M);
-            betaMat  = repmat(betaVec,1,M);
-            zMat     = repmat(zmin,N,1);
-
-            Ynew = (1 - alphaMat).*Y + alphaMat.*((1 - betaMat).*Yteacher + betaMat.*zMat);
-
-            lower = min(Y,[],1) - 1e-8;
-            upper = max(Y,[],1) + 1e-8;
-            overMask = any(bsxfun(@lt,Ynew,lower),2) | any(bsxfun(@gt,Ynew,upper),2);
-            Ynew(overMask,:) = (Y(overMask,:) + Yteacher(overMask,:))/2;
-        end
-
-        function [T,Ymean,Ystd] = learn_linear_mapping(Y,X,lambdaT)
-            Ymean = mean(Y,1);
-            Ystd  = std(Y,0,1);
-            Ystd(Ystd < 1e-12) = 1;
-            Yz = (Y - Ymean) ./ Ystd;
-            M = size(Y,2);
-            T = (Yz' * Yz + lambdaT * eye(M)) \ (Yz' * X);
-        end
-
-        function Xnew = map_linear(Yin,T,Ymean,Ystd,lb,ub)
-            if isempty(T) || isempty(Ymean) || isempty(Ystd)
-                Xnew = OS_DNS_Soft.mid_point(size(Yin,1),lb,ub);
-                return;
+            if numGood == 0
+                idxGood = (1:n)';
+                numGood = n;
+                idxBad  = [];
+                numBad  = 0;
             end
-            Yz = (Yin - Ymean) ./ Ystd;
-            Xraw = Yz * T;
-            Xnew = OS_DNS_Soft.clamp(Xraw,lb,ub);
-        end
 
-        function Xnew = map_local(Yin,Yref,Xref,kLocal,lb,ub)
-            if isempty(Yref) || isempty(Xref)
-                Xnew = OS_DNS_Soft.mid_point(size(Yin,1),lb,ub);
-                return;
-            end
-            kLocal = max(1,min(kLocal,size(Yref,1)));
-            try
-                dist = pdist2(Yin,Yref);
-            catch
-                dist = sqrt(max(0,sum(Yin.^2,2) + sum(Yref.^2,2)' - 2*(Yin*Yref')));
-            end
-            [~,order] = sort(dist,2);
-            idx = order(:,1:kLocal);
-            weights = zeros(size(idx));
-            for i = 1:size(idx,1)
-                di = dist(i,idx(i,:));
-                if all(di < 1e-12)
-                    w = double(di < 1e-12);
-                    if ~any(w)
-                        w(:) = 1;
+            Yscale = max(std(Y,0,1),1e-6);
+
+            %% 好解：差分 + 突变
+            if numGood > 0
+                Zg_lin = OS_DNS_Soft.encode_linear(Y(idxGood,:),linAE);
+                Zg_non = OS_DNS_Soft.encode_nonlinear(Y(idxGood,:),nonlinAE);
+                for t = 1:numGood
+                    % 选取三个随机的好解用于差分组合
+                    [a,b,c] = OS_DNS_Soft.sample_three(numGood,t);
+                    zg_lin = Zg_lin(t,:) + goodStep*(Zg_lin(a,:) - Zg_lin(b,:));
+                    zg_non = Zg_non(t,:) + goodStep*(Zg_non(a,:) - Zg_non(b,:));
+                    if mutationScale > 0
+                        zg_lin = zg_lin + mutationScale*randn(1,size(Zg_lin,2));
+                        zg_non = zg_non + mutationScale*randn(1,size(Zg_non,2));
                     end
-                else
-                    scale = median(di) + 1e-12;
-                    w = exp(-di./scale);
-                end
-                wsum = sum(w);
-                if wsum <= 0
-                    w = ones(1,kLocal) ./ kLocal;
-                else
-                    w = w ./ wsum;
-                end
-                weights(i,:) = w;
-            end
-
-            Xnew = zeros(size(Yin,1), size(Xref,2));
-            for i = 1:size(Yin,1)
-                neighX = Xref(idx(i,:),:);
-                Xnew(i,:) = weights(i,:) * neighX;
-            end
-
-            Xnew = OS_DNS_Soft.clamp(Xnew,lb,ub);
-        end
-
-        function Xnew = mid_point(N,lb,ub)
-            [lbv,ubv] = OS_DNS_Soft.expand_bounds(lb,ub);
-            mid = (lbv + ubv)/2;
-            Xnew = repmat(mid,N,1);
-        end
-
-        function Xclamp = clamp(X,lb,ub)
-            [lbv,ubv] = OS_DNS_Soft.expand_bounds(lb,ub,size(X,2));
-            Xclamp = min(repmat(ubv,size(X,1),1), max(repmat(lbv,size(X,1),1), X));
-        end
-
-        function [lbv,ubv] = expand_bounds(lb,ub,D)
-            if nargin < 3 || isempty(D)
-                D = max(numel(lb),numel(ub));
-                if D == 0
-                    D = 1;
+                    yg_lin = OS_DNS_Soft.decode_linear(zg_lin,linAE);
+                    yg_non = OS_DNS_Soft.decode_nonlinear(zg_non,nonlinAE);
+                    ymix   = mixWeight*yg_lin + (1-mixWeight)*yg_non;
+                    if noiseScale > 0
+                        ymix = ymix + noiseScale*randn(1,M).*Yscale;
+                    end
+                    Ynew(idxGood(t),:) = ymix;
                 end
             end
-            if isscalar(lb)
-                lbv = repmat(lb,1,D);
+
+            %% 坏解：向最近好解学习
+            if numBad > 0 && numGood > 0
+                Zg_lin = OS_DNS_Soft.encode_linear(Y(idxGood,:),linAE);
+                Zb_lin = OS_DNS_Soft.encode_linear(Y(idxBad,:),linAE);
+                Zg_non = OS_DNS_Soft.encode_nonlinear(Y(idxGood,:),nonlinAE);
+                Zb_non = OS_DNS_Soft.encode_nonlinear(Y(idxBad,:),nonlinAE);
+                nnIdx_lin = OS_DNS_Soft.nearest_indices(Zb_lin,Zg_lin);
+                for t = 1:numBad
+                    zg_lin = Zb_lin(t,:) + badStep*(Zg_lin(nnIdx_lin(t),:) - Zb_lin(t,:));
+                    zg_non = Zb_non(t,:) + badStep*(Zg_non(nnIdx_lin(t),:) - Zb_non(t,:));
+                    if mutationScale > 0
+                        zg_lin = zg_lin + mutationScale*randn(1,size(Zb_lin,2));
+                        zg_non = zg_non + mutationScale*randn(1,size(Zb_non,2));
+                    end
+                    yg_lin = OS_DNS_Soft.decode_linear(zg_lin,linAE);
+                    yg_non = OS_DNS_Soft.decode_nonlinear(zg_non,nonlinAE);
+                    ymix   = mixWeight*yg_lin + (1-mixWeight)*yg_non;
+                    if noiseScale > 0
+                        ymix = ymix + noiseScale*randn(1,M).*Yscale;
+                    end
+                    Ynew(idxBad(t),:) = ymix;
+                end
+            elseif numBad > 0
+                % 没有好解时退化为扰动
+                for t = 1:numBad
+                    noise = noiseScale*randn(1,M).*Yscale;
+                    Ynew(idxBad(t),:) = Y(idxBad(t),:) + noise;
+                end
+            end
+
+            %% 精英保留：保留一部分原始的好解
+            if eliteKeep > 0 && numGood > 0
+                eliteNum = max(1,round(eliteKeep*numGood));
+                eliteIdx = idxGood(1:min(eliteNum,numGood));
+                Ynew(eliteIdx,:) = Y(eliteIdx,:);
+            end
+        end
+
+        function [a,b,c] = sample_three(numCandidates,currentIdx)
+            idx = 1:numCandidates;
+            idx(idx==currentIdx) = [];
+            if numel(idx) < 2
+                a = currentIdx; b = currentIdx; c = currentIdx;
+                return;
+            end
+            perm = idx(randperm(numel(idx)));
+            a = perm(1);
+            if numel(perm) >= 2
+                b = perm(2);
             else
-                lbv = lb(:)';
-                if numel(lbv) < D
-                    lbv = [lbv repmat(lbv(end),1,D-numel(lbv))];
-                elseif numel(lbv) > D
-                    lbv = lbv(1:D);
-                end
+                b = perm(1);
             end
-            if isscalar(ub)
-                ubv = repmat(ub,1,D);
+            if numel(perm) >= 3
+                c = perm(3);
             else
-                ubv = ub(:)';
-                if numel(ubv) < D
-                    ubv = [ubv repmat(ubv(end),1,D-numel(ubv))];
-                elseif numel(ubv) > D
-                    ubv = ubv(1:D);
+                c = currentIdx;
+            end
+        end
+
+        function nnIdx = nearest_indices(Zquery,Zref)
+            nq = size(Zquery,1);
+            nr = size(Zref,1);
+            nnIdx = ones(nq,1);
+            if nr == 0
+                return;
+            end
+            for i = 1:nq
+                diff = Zref - Zquery(i,:);
+                dist = sum(diff.^2,2);
+                [~,minIdx] = min(dist);
+                nnIdx(i) = minIdx;
+            end
+        end
+
+        %% --- 目标到决策空间映射 ---
+        function [T,mu,sigma] = learn_linear_mapping(Y,X,lambda)
+            [n,m] = size(Y);
+            if nargin < 3
+                lambda = 1e-6;
+            end
+            mu = mean(Y,1);
+            sigma = std(Y,0,1);
+            sigma(sigma < 1e-6) = 1;
+            Yn = (Y - mu) ./ sigma;
+            A = Yn' * Yn + lambda * eye(m);
+            B = Yn' * X;
+            T = A \ B;
+        end
+
+        function Xnew = map_linear(Y,T,mu,sigma,lb,ub)
+            if isempty(T)
+                Xnew = repmat((lb+ub)/2,size(Y,1),1);
+                return;
+            end
+            Yn = (Y - mu) ./ sigma;
+            Xnew = Yn * T;
+            Xnew = OS_DNS_Soft.bound_correction(Xnew,lb,ub);
+        end
+
+        function Xlocal = map_local(Ynew,Y,X,k,sigmaScale,lb,ub)
+            nNew = size(Ynew,1);
+            Xlocal = zeros(nNew,size(X,2));
+            for i = 1:nNew
+                diff = Y - Ynew(i,:);
+                dist = sum(diff.^2,2);
+                [sorted,idx] = sort(dist);
+                kUse = min(k,numel(idx));
+                idx = idx(1:kUse);
+                d = sorted(1:kUse);
+                w = exp(-d/(sigmaScale*max(d(end),1e-6)));
+                if all(w==0)
+                    w(:) = 1;
                 end
+                w = w / sum(w);
+                Xlocal(i,:) = sum(X(idx,:).*w,1);
             end
-            if isempty(lbv)
-                lbv = zeros(1,D);
+            Xlocal = OS_DNS_Soft.bound_correction(Xlocal,lb,ub);
+        end
+
+        function X = bound_correction(X,lb,ub)
+            if ~isempty(lb)
+                X = max(X,repmat(lb,size(X,1),1));
             end
-            if isempty(ubv)
-                ubv = ones(1,D);
+            if ~isempty(ub)
+                X = min(X,repmat(ub,size(X,1),1));
             end
         end
 
-        function Xnew = restart_bad_solutions(Xnew,Xold,goodMask,gridInfo,restartRate,lb,ub)
-            badIdx = find(~goodMask);
-            if isempty(badIdx) || restartRate <= 0
+        %% --- 环境选择 (NSGA-II) ---
+        function Population = env_select_nsga2(Population,N)
+            if numel(Population) <= N
+                Population = Population(1:min(N,numel(Population)));
                 return;
             end
-
-            crowd = gridInfo.crowd;
-            [~,order] = sort(crowd(badIdx),'descend');
-            nRestart = min(numel(badIdx), max(1, round(restartRate * numel(badIdx))));
-            sel = badIdx(order(1:nRestart));
-
-            goodIdx = find(goodMask);
-            if isempty(goodIdx)
-                goodIdx = 1:size(Xold,1);
-            end
-
-            [lbv,ubv] = OS_DNS_Soft.expand_bounds(lb,ub,size(Xold,2));
-            span = max(ubv - lbv, 1e-9);
-
-            for i = 1:numel(sel)
-                anchor = Xold(goodIdx(randi(numel(goodIdx))),:);
-                noise  = 0.1 * span .* randn(1,size(Xold,2));
-                candidate = min(max(anchor + noise, lbv), ubv);
-                Xnew(sel(i),:) = candidate;
-            end
+            Objs = Population.objs;
+            [FrontNo,MaxFNo] = NDSort(Objs,N);
+            Next = FrontNo < MaxFNo;
+            Last = find(FrontNo==MaxFNo);
+            CrowdDis = OS_DNS_Soft.crowding_distance(Objs(Last,:));
+            [~,rank] = sort(CrowdDis,'descend');
+            SelectedLast = Last(rank(1:(N-sum(Next))));
+            Next(SelectedLast) = true;
+            Population = Population(Next);
         end
 
-        function Xnew = inject_diversity(Xnew,X,rate,Problem)
-            n = size(Xnew,1);
-            nOff = max(1,round(rate*n));
-            nOff = min(nOff,floor(size(X,1)/2));
-            if nOff <= 0
+        function CrowdDis = crowding_distance(Objs)
+            [n,m] = size(Objs);
+            CrowdDis = zeros(1,n);
+            if n == 0
                 return;
             end
-
-            parentIdx = randi(size(X,1),1,2*nOff);
-            parents   = X(parentIdx,:);
-            mutants   = OperatorGAhalf(Problem,parents);
-            replaceN  = min(size(mutants,1),n);
-            if replaceN <= 0
+            if n <= 2
+                CrowdDis(:) = inf;
                 return;
             end
-            replaceIdx = randperm(n,replaceN);
-            Xnew(replaceIdx,:) = mutants(1:replaceN,:);
-        end
-
-        function PopOut = env_select_nsga2(PopIn,N)
-            try
-                Objs = PopIn.objs;
-                [FrontNo,MaxFNo] = NDSort(Objs,N);
-                Next = FrontNo < MaxFNo;
-                CrowdDis = CrowdingDistance(Objs,FrontNo);
-                Last = find(FrontNo==MaxFNo);
-                [~,rank] = sort(CrowdDis(Last),'descend');
-                Next(Last(rank(1:N-sum(Next)))) = true;
-                PopOut = PopIn(Next);
-            catch
-                Objs = PopIn.objs;
-                Ymin = min(Objs,[],1);
-                Yrange = max(max(Objs,[],1)-Ymin,1e-12);
-                Yn = (Objs - Ymin) ./ Yrange;
-                score = sum(Yn,2);
-                [~,ord] = sort(score,'ascend');
-                PopOut = PopIn(ord(1:N));
+            Fmax = max(Objs,[],1);
+            Fmin = min(Objs,[],1);
+            for i = 1:m
+                [~,rank] = sort(Objs(:,i));
+                CrowdDis(rank(1))   = inf;
+                CrowdDis(rank(end)) = inf;
+                for j = 2:n-1
+                    prev = Objs(rank(j-1),i);
+                    next = Objs(rank(j+1),i);
+                    if Fmax(i) > Fmin(i)
+                        CrowdDis(rank(j)) = CrowdDis(rank(j)) + (next - prev)/(Fmax(i)-Fmin(i));
+                    else
+                        CrowdDis(rank(j)) = CrowdDis(rank(j)) + 0;
+                    end
+                end
             end
         end
     end
