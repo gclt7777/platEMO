@@ -35,6 +35,10 @@ classdef OS_DNS_Soft < ALGORITHM
             %% 参数
             [alpha,beta,lambdaT,tUpdateFreq,reuseT, ...
              epsRate,kNeighbor,sigmaScale,tauCheby,useRef,envMode, ...
+             kLocalMap,localMix,diversityRate,refAdaptFreq,restartRate,gridDiv] = ...
+             Algorithm.ParameterSet(0.40,0.15,1e-6,1,false, ...
+                                    0.01, 10,       1.0,      0.5,     1,     1, ...
+                                    6,    0.5,      0.2,      10,      0.15,   8);
 
             %% 初始化
             Population = Problem.Initialization();
@@ -79,7 +83,6 @@ classdef OS_DNS_Soft < ALGORITHM
                 [Ystar,maskInfo] = OS_DNS_Soft.soft_teacher_targets(Y, goodMask, RefVec, epsRate, kNeighbor, sigmaScale, tauCheby, gridDiv, zmin);
 
                 % 2) 全体松弛更新（含理想点牵引，带自适应步长）
-
                 domRatio   = sum(Ystar <= Y + 1e-9, 2) ./ size(Y,2);
                 alpha_vec  = alpha .* (0.2 + 0.8 .* domRatio);
                 beta_vec   = beta  .* (0.1 + 0.9 .* domRatio);
@@ -101,6 +104,10 @@ classdef OS_DNS_Soft < ALGORITHM
                     X_new = X_linear;
                 end
                 X_new = X_new + 1e-12*randn(size(X_new));   % 破并列的极微扰动
+
+                if restartRate > 0
+                    X_new = OS_DNS_Soft.restart_bad_solutions(X_new, X, lb, ub, maskInfo.badMask, maskInfo.gridCrowd, restartRate);
+                end
 
                 if diversityRate > 0 && size(X_new,1) > 1 && size(X,1) > 1
                     nOff = max(1, round(diversityRate * size(X_new,1)));
@@ -143,7 +150,7 @@ classdef OS_DNS_Soft < ALGORITHM
                 X = Population.decs;
                 gen = gen + 1;
             end
-        end
+@@ -92,50 +154,327 @@ classdef OS_DNS_Soft < ALGORITHM
     end
 
     %% ======== 辅助静态方法 ========
@@ -229,3 +236,245 @@ classdef OS_DNS_Soft < ALGORITHM
             Xnew = min(repmat(ub,N,1), max(repmat(lb,N,1), Xnew));
         end
 
+        function [Ystar,info] = soft_teacher_targets(Y, goodMask, RefVec, epsRate, kNeighbor, sigmaScale, tauCheby, gridDiv, zmin)
+            N = size(Y,1);
+            Ystar = Y;
+            kNeighbor = max(1, round(kNeighbor));
+            sigmaScale = max(0, sigmaScale);
+            if nargin < 9 || isempty(zmin)
+                zmin = min(Y,[],1);
+            end
+            if nargin < 8 || isempty(gridDiv)
+                gridDiv = 8;
+            end
+            goodMask = logical(goodMask(:));
+            if ~any(goodMask)
+                [~,best] = min(sum(Y,2));
+                goodMask(best) = true;
+            end
+            badMask = ~goodMask;
+
+            Ymin = min(Y,[],1);
+            Ymax = max(Y,[],1);
+            Yrange = max(Ymax - Ymin, 1e-12);
+            epsVec = epsRate .* Yrange;
+            Yn = (Y - Ymin) ./ Yrange;
+            [gridCrowd,gridID] = OS_DNS_Soft.grid_crowding(Yn, gridDiv);
+
+            goodIdx = find(goodMask);
+            badIdx  = find(badMask);
+            Ygood   = Y(goodIdx,:);
+            Ybad    = Y(badIdx,:);
+
+            if isempty(Ygood)
+                Ygood = Y;
+                goodIdx = (1:N)';
+            end
+
+            % sector assignment via reference vectors
+            if ~isempty(RefVec)
+                RefNorm = RefVec ./ max(1e-12,sqrt(sum(RefVec.^2,2)));
+                YnDir   = Yn ./ max(1e-12,sqrt(sum(Yn.^2,2)));
+                simVal  = YnDir * RefNorm';
+                [~,sectorIdx] = max(simVal,[],2);
+            else
+                sectorIdx = ones(N,1);
+                RefNorm = [];
+            end
+
+            % choose representative good solutions per sector (Chebyshev metric)
+            sectorBest = zeros(size(RefVec,1),1);
+            if ~isempty(RefVec)
+                for r = 1:size(RefVec,1)
+                    cand = goodIdx(sectorIdx(goodIdx)==r);
+                    if isempty(cand)
+                        cand = goodIdx;
+                    end
+                    if isempty(cand)
+                        continue;
+                    end
+                    candNorm = Yn(cand,:);
+                    ref = max(RefNorm(r,:),1e-6);
+                    cheby = max((candNorm+1e-9)./ref,[],2) + tauCheby*sum(candNorm,2);
+                    [~,bestLocal] = min(cheby);
+                    sectorBest(r) = cand(bestLocal);
+                end
+            end
+
+            % good solutions target: slight pull toward sector exemplar or ideal point
+            if ~isempty(goodIdx)
+                goodTarget = Y(goodIdx,:);
+                if ~isempty(RefVec)
+                    for i = 1:length(goodIdx)
+                        g = goodIdx(i);
+                        sector = sectorIdx(g);
+                        exemplar = g;
+                        if sector <= numel(sectorBest) && sectorBest(sector) ~= 0
+                            exemplar = sectorBest(sector);
+                        end
+                        if exemplar == g
+                            mix = min(max(tauCheby,0),0.5);
+                            goodTarget(i,:) = (1 - mix).*Y(g,:) + mix.*zmin;
+                        else
+                            mix = min(max(tauCheby,0),0.7);
+                            goodTarget(i,:) = (1 - mix).*Y(g,:) + mix.*Y(exemplar,:);
+                        end
+                    end
+                else
+                    mix = min(max(tauCheby,0),0.5);
+                    goodTarget = (1 - mix).*Y(goodIdx,:) + mix.*repmat(zmin,length(goodIdx),1);
+                end
+                Ystar(goodIdx,:) = goodTarget;
+            end
+
+            if ~isempty(badIdx)
+                try
+                    dist = pdist2(Ybad, Ygood);
+                catch
+                    dist = sqrt(max(0, sum(Ybad.^2,2) + sum(Ygood.^2,2)' - 2*(Ybad*Ygood')));
+                end
+                if isempty(dist)
+                    dist = zeros(length(badIdx),1);
+                end
+                sigBase = median(dist(:));
+                if ~isfinite(sigBase) || sigBase <= 0
+                    sigBase = 1;
+                end
+                for ii = 1:length(badIdx)
+                    idx = badIdx(ii);
+                    candMask = all(bsxfun(@le, Ygood, Y(idx,:) + epsVec + 1e-9),2);
+                    cand = goodIdx(candMask);
+                    if isempty(cand)
+                        if ~isempty(RefVec)
+                            sec = sectorIdx(idx);
+                            if sec <= numel(sectorBest) && sectorBest(sec) ~= 0
+                                cand = sectorBest(sec);
+                            end
+                        end
+                    end
+                    if isempty(cand)
+                        [~,order] = sort(dist(ii,:),'ascend');
+                        kn = min(kNeighbor,length(order));
+                        cand = goodIdx(order(1:kn));
+                    end
+                    if isempty(cand)
+                        cand = goodIdx(randi(length(goodIdx)));
+                    end
+                    cand = cand(:);
+                    candY = Y(cand,:);
+                    if numel(cand) > 1
+                        d = sqrt(sum((candY - Y(idx,:)).^2,2));
+                        sigma = max(sigmaScale*sigBase,1e-9);
+                        w = exp(-d.^2./(2*sigma^2));
+                        if ~isempty(RefVec)
+                            sec = sectorIdx(idx);
+                            ref = max(1e-6,RefNorm(max(1,min(sec,size(RefNorm,1))),:));
+                            cheby = max(((Yn(cand,:))+1e-9)./ref,[],2);
+                            tau = min(max(tauCheby,0),1);
+                            w = w .* exp(-tau*cheby);
+                        end
+                    else
+                        w = 1;
+                    end
+                    if all(w <= 0)
+                        w = ones(size(w));
+                    end
+                    w = w ./ sum(w);
+                    Ystar(idx,:) = w' * candY;
+                end
+            end
+
+            info.goodMask = goodMask;
+            info.badMask  = badMask;
+            info.gridCrowd = gridCrowd;
+            info.gridID    = gridID;
+        end
+
+        function [crowd,cellID] = grid_crowding(Yn, gridDiv)
+            if nargin < 2 || gridDiv < 2
+                gridDiv = 8;
+            end
+            Yn = max(0,min(1,Yn));
+            bins = min(gridDiv-1, floor(Yn .* gridDiv));
+            coeff = gridDiv.^((0:size(Yn,2)-1));
+            cellID = bins * coeff' + 1;
+            maxID = max(cellID);
+            if isempty(maxID) || maxID < 1
+                crowd = ones(size(cellID));
+                return;
+            end
+            counts = accumarray(cellID,1,[maxID,1]);
+            crowd = counts(cellID);
+        end
+
+        function Xnew = restart_bad_solutions(Xnew, Xold, lb, ub, badMask, gridCrowd, restartRate)
+            if ~any(badMask) || restartRate <= 0
+                return;
+            end
+            idxBad = find(badMask);
+            if isempty(gridCrowd)
+                badCrowd = ones(size(idxBad));
+            else
+                badCrowd = gridCrowd(idxBad);
+            end
+            nRestart = min(numel(idxBad), max(0, round(restartRate * numel(idxBad))));
+            if nRestart <= 0
+                return;
+            end
+            [~,order] = sort(badCrowd,'descend');
+            idxBad = idxBad(order(1:nRestart));
+
+            goodIdx = find(~badMask);
+            if isempty(goodIdx)
+                goodIdx = 1:size(Xold,1);
+            end
+            lbv = lb; ubv = ub;
+            if isscalar(lbv), lbv = repmat(lbv,1,size(Xnew,2)); end
+            if isscalar(ubv), ubv = repmat(ubv,1,size(Xnew,2)); end
+            if iscolumn(lbv), lbv = lbv'; end
+            if iscolumn(ubv), ubv = ubv'; end
+            span = max(ubv - lbv, 1e-9);
+
+            for i = 1:length(idxBad)
+                teacher = Xold(goodIdx(randi(length(goodIdx))),:);
+                noise = 0.1 * span .* randn(1,size(Xnew,2));
+                candidate = teacher + noise;
+                candidate = min(max(candidate, lbv), ubv);
+                Xnew(idxBad(i),:) = candidate;
+            end
+        end
+
+        function Ref = adapt_reference_vectors(PopObj, RefBase)
+            if isempty(RefBase)
+                Ref = [];
+                return;
+            end
+            range = max(PopObj,[],1) - min(PopObj,[],1);
+            Ref = RefBase .* repmat(range,size(RefBase,1),1);
+        end
+
+        function [PopOut,FrontNo,CrowdDis] = envSelect_NSGA2(PopIn, N)
+            try
+                Objs = PopIn.objs;
+                [FrontNo,MaxFNo] = NDSort(Objs, N);
+                Next = FrontNo < MaxFNo;
+                CrowdDis = CrowdingDistance(Objs, FrontNo);
+                Last = find(FrontNo==MaxFNo);
+                [~,rank] = sort(CrowdDis(Last),'descend');
+                Next(Last(rank(1:N-sum(Next)))) = true;
+                PopOut = PopIn(Next);
+                FrontNo = FrontNo(Next);
+                CrowdDis = CrowdDis(Next);
+            catch
+                % 兜底：归一化打分
+                Objs = PopIn.objs;
+                Ymin = min(Objs,[],1); Ymax = max(Objs,[],1);
+                rng  = max(Ymax - Ymin, 1e-12);
+                Yn   = (Objs - Ymin) ./ rng;
+                score = sum(Yn,2);
+                [~,ord] = sort(score,'ascend');
+                PopOut = PopIn(ord(1:N));
+                FrontNo = ones(N,1);
+                CrowdDis = inf(N,1);
+            end
+        end
