@@ -35,10 +35,6 @@ classdef OS_DNS_Soft < ALGORITHM
             %% 参数
             [alpha,beta,lambdaT,tUpdateFreq,reuseT, ...
              epsRate,kNeighbor,sigmaScale,tauCheby,useRef,envMode, ...
-             kLocalMap,localMix,diversityRate] = ...
-             Algorithm.ParameterSet(0.40,0.15,1e-6,1,false, ...
-                                    0.01, 10,       1.0,      0.5,     1,     1, ...
-                                    6,    0.5,      0.2);
 
             %% 初始化
             Population = Problem.Initialization();
@@ -50,15 +46,40 @@ classdef OS_DNS_Soft < ALGORITHM
 
             % 推迟到循环首轮再学习 T，避免重复学习
             T = []; Ymean = []; Ystd = [];
+            if useRef
+                [RefBase,~] = UniformPoint(max(N,Problem.M),Problem.M);
+                RefVec = RefBase;
+            else
+                RefBase = [];
+                RefVec  = [];
+            end
             gen = 1;
 
             %% 进化主循环
             while Algorithm.NotTerminated(Population)
                 % 1) 软教师集合（每个体一个 y*）
-                Ystar = soft_teacher_targets(Y, epsRate, kNeighbor, sigmaScale, tauCheby, useRef);
+                [FrontNo,MaxFNo] = NDSort(Y, N);
+                goodMask = FrontNo==1;
+                if sum(goodMask) < max(2,ceil(0.2*N))
+                    goodMask = FrontNo <= min(MaxFNo,2);
+                end
+                if useRef
+                    if mod(gen-1, max(1,round(refAdaptFreq)))==0 || gen==1
+                        refSource = Y(goodMask,:);
+                        if isempty(refSource)
+                            refSource = Y;
+                        end
+                        RefVec = OS_DNS_Soft.adapt_reference_vectors(refSource, RefBase);
+                        RefVec = RefVec ./ max(1e-12,sqrt(sum(RefVec.^2,2)));
+                    end
+                else
+                    RefVec = [];
+                end
+                zmin = min(Y,[],1);
+                [Ystar,maskInfo] = OS_DNS_Soft.soft_teacher_targets(Y, goodMask, RefVec, epsRate, kNeighbor, sigmaScale, tauCheby, gridDiv, zmin);
 
                 % 2) 全体松弛更新（含理想点牵引，带自适应步长）
-                zmin  = min(Y,[],1);
+
                 domRatio   = sum(Ystar <= Y + 1e-9, 2) ./ size(Y,2);
                 alpha_vec  = alpha .* (0.2 + 0.8 .* domRatio);
                 beta_vec   = beta  .* (0.1 + 0.9 .* domRatio);
@@ -208,30 +229,3 @@ classdef OS_DNS_Soft < ALGORITHM
             Xnew = min(repmat(ub,N,1), max(repmat(lb,N,1), Xnew));
         end
 
-        function [PopOut,FrontNo,CrowdDis] = envSelect_NSGA2(PopIn, N)
-            try
-                Objs = PopIn.objs;
-                [FrontNo,MaxFNo] = NDSort(Objs, N);
-                Next = FrontNo < MaxFNo;
-                CrowdDis = CrowdingDistance(Objs, FrontNo);
-                Last = find(FrontNo==MaxFNo);
-                [~,rank] = sort(CrowdDis(Last),'descend');
-                Next(Last(rank(1:N-sum(Next)))) = true;
-                PopOut = PopIn(Next);
-                FrontNo = FrontNo(Next);
-                CrowdDis = CrowdDis(Next);
-            catch
-                % 兜底：归一化打分
-                Objs = PopIn.objs;
-                Ymin = min(Objs,[],1); Ymax = max(Objs,[],1);
-                rng  = max(Ymax - Ymin, 1e-12);
-                Yn   = (Objs - Ymin) ./ rng;
-                score = sum(Yn,2);
-                [~,ord] = sort(score,'ascend');
-                PopOut = PopIn(ord(1:N));
-                FrontNo = ones(N,1);
-                CrowdDis = inf(N,1);
-            end
-        end
-    end
-end
