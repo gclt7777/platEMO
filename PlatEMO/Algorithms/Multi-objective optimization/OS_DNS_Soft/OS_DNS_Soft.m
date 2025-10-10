@@ -130,7 +130,8 @@ classdef OS_DNS_Soft < ALGORITHM
                 [~,order] = sort(diag(Val),'descend');
                 V = Vall(:,order(1:latentDim));
             else
-                [V,~] = eigs((C+C')/2,latentDim,'largestreal','Tolerance',1e-6,'SubspaceDimension',max(latentDim+2,5));
+                subspaceDim = min(m,max(latentDim+2,5));
+                [V,~] = eigs((C+C')/2,latentDim,'largestreal','Tolerance',1e-6,'SubspaceDimension',subspaceDim);
             end
             model.type = 'linear';
             model.mean = mu;
