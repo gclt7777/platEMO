@@ -9,23 +9,6 @@ classdef OS_DNS_Soft < ALGORITHM
 %   4) 评估并结合网格拥挤度、参考向量指导的环境选择；必要时对拥挤坏解做重启。
 %
 % 参数（Algorithm.ParameterSet）：
-%   alpha         [0.40]  坏解随教师前进的基准步长
-%   beta          [0.15]  理想点牵引权重
-%   lambdaT       [1e-6]  线性预像岭惩罚
-%   tUpdateFreq   [1]     线性预像更新频率（代）
-%   reuseT        [false] 是否复用旧 T（false 为每次更新重学）
-%   epsRate       [0.01]  ε-支配阈值（相对每维范围）
-%   kNeighbor     [10]    软教师候选近邻数
-%   sigmaScale    [1.0]   高斯邻近权尺度
-%   tauCheby      [0.5]   扇区偏好温度（0~1）
-%   useRef        [1]     是否启用参考向量引导
-%   envMode       [1]     环境选择：1=HypE，2=RVEA(APD)，其他=NSGA-II
-%   kLocalMap     [6]     局部映射的近邻数（0 表示只用线性预像）
-%   localMix      [0.5]   线性/局部映射混合权重
-%   diversityRate [0.2]   额外 GA 变异体的比例
-%   refAdaptFreq  [10]    参考向量自适应频率（代）
-%   restartRate   [0.15]  拥挤坏解的重启比例
-%   gridDiv       [8]     目标空间网格划分精度
 
     methods
         function main(Algorithm,Problem)
@@ -34,9 +17,6 @@ classdef OS_DNS_Soft < ALGORITHM
              epsRate,kNeighbor,sigmaScale,tauCheby,useRef,envMode, ...
              kLocalMap,localMix,diversityRate,refAdaptFreq,restartRate,gridDiv] = ...
              Algorithm.ParameterSet(0.40,0.15,1e-6,1,false, ...
-                                    0.01,10,1.0,0.5,1,1, ...
-                                    6,0.5,0.2,10,0.15,8);
-
             %% 初始化
             Population = Problem.Initialization();
             N  = Problem.N;
@@ -47,85 +27,33 @@ classdef OS_DNS_Soft < ALGORITHM
             Y = Population.objs;
             X = Population.decs;
 
-            T = [];
-            Ymean = [];
-            Ystd  = [];
 
-            if useRef
-                [RefBase,~] = UniformPoint(max(N,Problem.M),Problem.M);
-                RefVec  = RefBase;
             else
                 RefBase = [];
                 RefVec  = [];
             end
-            sectorID = ones(size(Y,1),1);
+
             gen = 1;
 
             %% 主循环
             while Algorithm.NotTerminated(Population)
-                % 1) 区分好解/坏解
-                [FrontNo,MaxFNo] = NDSort(Y,N);
+
                 goodMask = FrontNo==1;
                 if sum(goodMask) < max(2,ceil(0.2*N))
                     goodMask = FrontNo <= min(MaxFNo,2);
                 end
-                if ~any(goodMask)
-                    [~,best] = min(sum(Y,2));
-                    goodMask(best) = true;
-                end
-
-                % 2) 参考向量自适应 & 扇区划分
-                if useRef
-                    [RefVec,sectorID] = OS_DNS_Soft.update_reference_vectors(Y, goodMask, RefVec, RefBase, gen, refAdaptFreq);
-                else
-                    RefVec  = [];
-                    sectorID = ones(size(Y,1),1);
-                end
-
-                % 3) 构造软教师
-                zmin = min(Y,[],1);
-                [Yteacher,teacherInfo] = OS_DNS_Soft.construct_teachers(Y, goodMask, sectorID, RefVec, zmin, ...
-                    epsRate,kNeighbor,sigmaScale,tauCheby,gridDiv);
-
-                % 4) 目标空间松弛
-                Y_new = OS_DNS_Soft.relax_population(Y,Yteacher,zmin,goodMask,alpha,beta);
 
                 % 5) 线性+局部映射
                 if gen==1 || (~reuseT && mod(gen-1,tUpdateFreq)==0)
                     [T,Ymean,Ystd] = OS_DNS_Soft.learnT_linear(Y,X,lambdaT);
                 end
-                X_linear = OS_DNS_Soft.mapY2X_linear(Y_new,T,lb,ub,Ymean,Ystd);
-                if kLocalMap > 0 && localMix > 0
-                    X_local  = OS_DNS_Soft.mapY2X_local(Y_new,Y,X,kLocalMap,lb,ub);
-                    mixRatio = min(max(localMix,0),1);
-                    X_new    = (1-mixRatio).*X_linear + mixRatio.*X_local;
-                else
-                    X_new = X_linear;
-                end
-                X_new = X_new + 1e-12*randn(size(X_new));
 
-                % 6) 拥挤坏解重启
-                if restartRate > 0
-                    X_new = OS_DNS_Soft.restart_bad_solutions(X_new,X,lb,ub,~goodMask,teacherInfo.gridCrowd,restartRate);
-                end
-
-                % 7) 多样化注入
-                if diversityRate > 0 && size(X,1) > 1
-                    nOff = max(1,round(diversityRate*size(X_new,1)));
-                    nOff = min(nOff,floor(size(X,1)/2));
-                    if nOff > 0
-                        parentIdx = randi(size(X,1),1,2*nOff);
-                        parents   = X(parentIdx,:);
-                        mutants   = OperatorGAhalf(Problem,parents);
-                        replaceN  = min(size(mutants,1),size(X_new,1));
-                        if replaceN > 0
-                            replaceIdx = randperm(size(X_new,1),replaceN);
                             X_new(replaceIdx,:) = mutants(1:replaceN,:);
                         end
                     end
                 end
 
-                % 8) 评估+环境选择
+
                 Offspring = Problem.Evaluation(X_new);
                 PopAll    = [Population,Offspring];
 
@@ -146,7 +74,7 @@ classdef OS_DNS_Soft < ALGORITHM
                 X = Population.decs;
                 gen = gen + 1;
             end
-        end
+@@ -92,50 +154,327 @@ classdef OS_DNS_Soft < ALGORITHM
     end
 
     %% === 辅助函数 ===
@@ -411,7 +339,6 @@ classdef OS_DNS_Soft < ALGORITHM
             Xnew = min(repmat(ub,N,1), max(repmat(lb,N,1), Xnew));
         end
 
-        function [crowd,cellID] = grid_crowding(Yn,gridDiv)
             if nargin < 2 || gridDiv < 2
                 gridDiv = 8;
             end
@@ -428,17 +355,6 @@ classdef OS_DNS_Soft < ALGORITHM
             crowd = counts(cellID);
         end
 
-        function Xnew = restart_bad_solutions(Xnew,Xold,lb,ub,badMask,gridCrowd,restartRate)
-            badIdx = find(badMask);
-            if isempty(badIdx) || restartRate <= 0
-                return;
-            end
-            if isempty(gridCrowd)
-                gridCrowd = ones(size(Xold,1),1);
-            end
-            [~,order] = sort(gridCrowd(badIdx),'descend');
-            nRestart = min(numel(badIdx), max(1, round(restartRate * numel(badIdx))));
-            sel = badIdx(order(1:nRestart));
 
             goodIdx = find(~badMask);
             if isempty(goodIdx)
@@ -451,16 +367,7 @@ classdef OS_DNS_Soft < ALGORITHM
             if iscolumn(ubv), ubv = ubv'; end
             span = max(ubv - lbv, 1e-9);
 
-            for i = 1:length(sel)
-                teacher = Xold(goodIdx(randi(length(goodIdx))),:);
-                noise   = 0.1 * span .* randn(1,size(Xnew,2));
-                candidate = teacher + noise;
-                candidate = min(max(candidate,lbv),ubv);
-                Xnew(sel(i),:) = candidate;
-            end
-        end
 
-        function PopOut = envSelect_NSGA2(PopIn,N)
             try
                 Objs = PopIn.objs;
                 [FrontNo,MaxFNo] = NDSort(Objs,N);
@@ -481,5 +388,3 @@ classdef OS_DNS_Soft < ALGORITHM
                 PopOut = PopIn(ord(1:N));
             end
         end
-    end
-end
