@@ -20,6 +20,9 @@ classdef OS_DNS_Soft < ALGORITHM
 %   tauCheby     [0.5]   切比雪夫权重的温度（越小越偏向沿参考向量更优者）
 %   useRef       [1]     是否启用参考向量加权（0/1）
 %   envMode      [1]     环境选择：1=HypE，2=RVEA(APD)，其他=NSGA-II
+%   kLocalMap    [6]     局部预像的近邻数（>0 时启用局部非线性映射）
+%   localMix     [0.5]   线性/局部预像的混合比例（0=仅线性，1=仅局部）
+%   diversityRate[0.2]   注入多样化变异个体的比例（相对种群规模）
 %
 % 用法示例：
 %   platemo('algorithm',@OS_DNS_Soft,'problem',@DTLZ2,'M',8,'D',100,'N',210,...
@@ -31,9 +34,11 @@ classdef OS_DNS_Soft < ALGORITHM
         function main(Algorithm,Problem)
             %% 参数
             [alpha,beta,lambdaT,tUpdateFreq,reuseT, ...
-             epsRate,kNeighbor,sigmaScale,tauCheby,useRef,envMode] = ...
+             epsRate,kNeighbor,sigmaScale,tauCheby,useRef,envMode, ...
+             kLocalMap,localMix,diversityRate] = ...
              Algorithm.ParameterSet(0.40,0.15,1e-6,1,false, ...
-                                    0.01, 10,       1.0,      0.5,     1,     1);
+                                    0.01, 10,       1.0,      0.5,     1,     1, ...
+                                    6,    0.5,      0.2);
 
             %% 初始化
             Population = Problem.Initialization();
@@ -52,16 +57,45 @@ classdef OS_DNS_Soft < ALGORITHM
                 % 1) 软教师集合（每个体一个 y*）
                 Ystar = soft_teacher_targets(Y, epsRate, kNeighbor, sigmaScale, tauCheby, useRef);
 
-                % 2) 全体松弛更新（含理想点牵引）
+                % 2) 全体松弛更新（含理想点牵引，带自适应步长）
                 zmin  = min(Y,[],1);
-                Y_new = (1 - alpha).*Y + alpha.*((1 - beta).*Ystar + beta.*repmat(zmin,size(Y,1),1));
+                domRatio   = sum(Ystar <= Y + 1e-9, 2) ./ size(Y,2);
+                alpha_vec  = alpha .* (0.2 + 0.8 .* domRatio);
+                beta_vec   = beta  .* (0.1 + 0.9 .* domRatio);
+                alpha_mat  = repmat(alpha_vec(:),1,size(Y,2));
+                beta_mat   = repmat(beta_vec(:),1,size(Y,2));
+                zmin_mat   = repmat(zmin,size(Y,1),1);
+                Y_new      = (1 - alpha_mat).*Y + alpha_mat.*((1 - beta_mat).*Ystar + beta_mat.*zmin_mat);
 
                 % 3) 线性预像 Y->X（EAGO风格）
                 if gen==1 || (~reuseT && mod(gen-1,tUpdateFreq)==0)
                     [T, Ymean, Ystd] = OS_DNS_Soft.learnT_linear(Y, X, lambdaT);
                 end
-                X_new = OS_DNS_Soft.mapY2X_linear(Y_new, T, lb, ub, Ymean, Ystd);
+                X_linear = OS_DNS_Soft.mapY2X_linear(Y_new, T, lb, ub, Ymean, Ystd);
+                if kLocalMap > 0 && localMix > 0
+                    X_local  = OS_DNS_Soft.mapY2X_local(Y_new, Y, X, kLocalMap, lb, ub);
+                    mixRatio = min(max(localMix,0),1);
+                    X_new    = (1 - mixRatio).*X_linear + mixRatio.*X_local;
+                else
+                    X_new = X_linear;
+                end
                 X_new = X_new + 1e-12*randn(size(X_new));   % 破并列的极微扰动
+
+                if diversityRate > 0 && size(X_new,1) > 1 && size(X,1) > 1
+                    nOff = max(1, round(diversityRate * size(X_new,1)));
+                    maxPairs = floor(size(X,1)/2);
+                    nOff = min(nOff, maxPairs);
+                    if nOff > 0
+                        parentIdx = randi(size(X,1),1,2*nOff);
+                        parents   = X(parentIdx,:);
+                        mutants   = OperatorGAhalf(Problem, parents);
+                        replaceN  = min(size(mutants,1), size(X_new,1));
+                        if replaceN > 0
+                            replaceIdx = randperm(size(X_new,1), replaceN);
+                            X_new(replaceIdx,:) = mutants(1:replaceN,:);
+                        end
+                    end
+                end
 
                 % 4) 评估与环境选择
                 Offspring = Problem.Evaluation(X_new);
@@ -105,6 +139,66 @@ classdef OS_DNS_Soft < ALGORITHM
             Yz = (Yin - Ymean) ./ Ystd;
             Xnew = Yz * T;                  % N x D
             [N, D] = size(Xnew);
+            if isscalar(lb), lb = repmat(lb, 1, D); end
+            if isscalar(ub), ub = repmat(ub, 1, D); end
+            if iscolumn(lb), lb = lb'; end
+            if iscolumn(ub), ub = ub'; end
+            if numel(lb) ~= D, lb = repmat(lb(1), 1, D); end
+            if numel(ub) ~= D, ub = repmat(ub(1), 1, D); end
+            Xnew = min(repmat(ub,N,1), max(repmat(lb,N,1), Xnew));
+        end
+
+        function Xnew = mapY2X_local(Yin, Yref, Xref, kLocal, lb, ub)
+            if isempty(Yref) || isempty(Xref)
+                D = max([size(Xref,2), numel(lb), numel(ub)]);
+                if D == 0
+                    D = size(Yin,2);
+                end
+                lbv = lb; ubv = ub;
+                if isscalar(lbv), lbv = repmat(lbv,1,D); end
+                if isscalar(ubv), ubv = repmat(ubv,1,D); end
+                if iscolumn(lbv), lbv = lbv'; end
+                if iscolumn(ubv), ubv = ubv'; end
+                mid = (lbv + ubv) / 2;
+                Xnew = repmat(mid, size(Yin,1), 1);
+                return;
+            end
+            kLocal = max(1, min(kLocal, size(Yref,1)));
+            try
+                dist = pdist2(Yin, Yref);
+            catch
+                dist = sqrt(max(0, sum(Yin.^2,2) + sum(Yref.^2,2)' - 2*(Yin*Yref')));
+            end
+            [~, order] = sort(dist, 2);
+            idx = order(:,1:kLocal);
+            weights = zeros(size(idx));
+            for i = 1:size(idx,1)
+                di = dist(i, idx(i,:));
+                if all(di < 1e-12)
+                    w = zeros(1,kLocal);
+                    w(di<1e-12) = 1;
+                    if ~any(w)
+                        w(:) = 1;
+                    end
+                else
+                    scale = median(di) + 1e-12;
+                    w = exp(-di./scale);
+                end
+                wsum = sum(w);
+                if wsum <= 0
+                    w = ones(1,kLocal) ./ kLocal;
+                else
+                    w = w ./ wsum;
+                end
+                weights(i,:) = w;
+            end
+            Xnew = zeros(size(Yin,1), size(Xref,2));
+            for i = 1:size(Yin,1)
+                neighX = Xref(idx(i,:),:);
+                w = weights(i,:)';
+                Xnew(i,:) = (w' * neighX);
+            end
+            [N,D] = size(Xnew);
             if isscalar(lb), lb = repmat(lb, 1, D); end
             if isscalar(ub), ub = repmat(ub, 1, D); end
             if iscolumn(lb), lb = lb'; end
