@@ -14,6 +14,12 @@ methods(Static)
         fit = sum(ObjsN, 2); % 越小越好
     end
 
+    function [score, fit, dist] = ConvergenceScore(ObjsN)
+        fit  = sum(ObjsN, 2);
+        dist = sqrt(sum(ObjsN.^2, 2));
+        score = fit + 0.25*dist;
+    end
+
     function seedIdx = ExtremeSeeds(ObjsN, K)
         [~, idxMin] = min(ObjsN, [], 1);
         seedIdx = unique(idxMin(:)', 'stable');
@@ -79,7 +85,12 @@ methods(Static)
     end
 
     %% —— 潜空间遗传：SBX + 高斯突变 —— %%
-    function Zc = SBX_PM(Z1, Z2, etaC, ~, pm)
+    function Zc = SBX_PM(Z1, Z2, etaC, ~, pm, shrink)
+        if nargin < 6 || isempty(shrink)
+            shrink = 1;
+        end
+        shrink = max(shrink, 0.05);
+
         % SBX 产生一个子代（逐行在 c1/c2 中任选）
         U = rand(size(Z1));
         betaQ = zeros(size(Z1));
@@ -94,10 +105,11 @@ methods(Static)
 
         % 自适应高斯突变（方差按父代联合标准差的 0.15 倍）
         Zstack = [Z1; Z2];
-        sigma  = 0.15*std(Zstack, 0, 1);
+        sigma  = 0.15*std(Zstack, 0, 1) * shrink;
         sigma  = max(sigma, 1e-12);
         noise  = randn(size(Zc)) .* sigma;
-        mask   = rand(size(Zc)) < pm;
+        pmLocal = max(0.01, pm*shrink);
+        mask   = rand(size(Zc)) < pmLocal;
         Zc     = Zc + mask.*noise;
     end
 
@@ -136,6 +148,22 @@ methods(Static)
             if numel(upper) == 1, upper = repmat(upper, 1, D); end
             decsNew = min(max(decsNew, lower), upper);
         end
+    end
+
+    function CA = RefineWithSeeds(CA, DA, N_CA, zmin, zmax)
+        if isempty(CA) || isempty(DA)
+            return;
+        end
+
+        [ObjsN_DA, ~, ~] = VaEAUtils.NormalizeObjs(DA.objs, zmin, zmax);
+        seedIdx = VaEAUtils.ExtremeSeeds(ObjsN_DA, min(size(ObjsN_DA,1), N_CA));
+        if isempty(seedIdx)
+            return;
+        end
+
+        seeds = DA(seedIdx);
+        Union = [CA, seeds];
+        CA = UpdateCA_VaEA([], Union, N_CA, zmin, zmax);
     end
 end
 end

@@ -8,20 +8,23 @@ function CA = UpdateCA_VaEA(~, Union, N_CA, zmin, zmax)
     end
 
     [FrontNo, MaxFNo] = NDSort(Union.objs, N_CA);
+    [ObjsN, ~, ~] = VaEAUtils.NormalizeObjs(Union.objs, zmin, zmax);
+    [scoreAll, ~, distAll] = VaEAUtils.ConvergenceScore(ObjsN);
     keep = FrontNo < MaxFNo;
     CA   = Union(keep);
 
     remain = N_CA - length(CA);
     if remain > 0
         lastIdx = find(FrontNo == MaxFNo);
-        [ObjsN, ~, ~] = VaEAUtils.NormalizeObjs(Union.objs, zmin, zmax);
-        fit = VaEAUtils.FitScore(ObjsN);
-        [~, order] = sort(fit(lastIdx), 'ascend');
-        CA = [CA, Union(lastIdx(order(1:remain)))];
+        metrics = [scoreAll(lastIdx), distAll(lastIdx)];
+        [~, order] = sortrows(metrics, [1 2]);
+        take = min(remain, numel(order));
+        CA = [CA, Union(lastIdx(order(1:take)))];
     elseif length(CA) > N_CA
-        [ObjsN, ~, ~] = VaEAUtils.NormalizeObjs(CA.objs, zmin, zmax);
-        fit = VaEAUtils.FitScore(ObjsN);
-        [~, ord] = sort(fit, 'ascend');
-        CA = CA(ord(1:N_CA));
+        [ObjsN_CA, ~, ~] = VaEAUtils.NormalizeObjs(CA.objs, zmin, zmax);
+        [scoreCA, ~, distCA] = VaEAUtils.ConvergenceScore(ObjsN_CA);
+        metrics = [scoreCA, distCA];
+        [~, ord] = sortrows(metrics, [1 2]);
+        CA = CA(ord(1:min(N_CA, numel(ord))));
     end
 end

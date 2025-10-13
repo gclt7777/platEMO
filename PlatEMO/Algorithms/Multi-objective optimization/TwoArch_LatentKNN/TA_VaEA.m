@@ -18,11 +18,14 @@ methods
         [alpha, nSeed, opMode, kLatent, Knn, etaC, etaM, pm] = ...
             Algorithm.ParameterSet(0.6, M, 1, kDefault, 5, 20, 20, 1/max(2,kDefault));
 
+        alphaBase = alpha;
+        maxFE = max(Problem.maxFE, 1);
+        minDAShare = 0.15;
+
         % 初始化
         Population = Problem.Initialization();
         N  = Problem.N;
-        nCA = ceil(alpha*N);
-        nDA = N - nCA;
+        [nCA, nDA] = computeArchiveSizes(N, M, alphaBase, minDAShare);
 
         % 首次归一化边界（全局）
         [~, zmin, zmax] = VaEAUtils.NormalizeObjs(Population.objs, [], []);
@@ -33,6 +36,8 @@ methods
 
         while Algorithm.NotTerminated([CA, DA])
             Pool = [CA, DA];
+
+            progress = min(max(Problem.FE/maxFE, 0), 1);
 
             if opMode == 0
                 % —— 决策空间：沿用 PlatEMO 的 OperatorGA ——
@@ -55,7 +60,9 @@ methods
                 Z2 = VaEAUtils.AE_Encode(P2.objs, zminAE, zmaxAE, mu, W);
 
                 % 潜空间 SBX + 高斯突变（自适应方差）
-                Zc = VaEAUtils.SBX_PM(Z1, Z2, etaC, etaM, pm);
+                pmStage = max(0.05, pm*(1 - 0.3*progress));
+                shrink  = max(0.4, 1 - 0.5*progress);
+                Zc = VaEAUtils.SBX_PM(Z1, Z2, etaC, etaM, pmStage, shrink);
 
                 % 解码回“归一化目标空间”并裁剪到[0,1]
                 YN = VaEAUtils.AE_Decode(Zc, mu, W);
@@ -74,8 +81,29 @@ methods
             [~, zmin, zmax] = VaEAUtils.NormalizeObjs(Union.objs, [], []);
 
             % 两档更新（VaEA思想）
+            progress = min(max(Problem.FE/maxFE, 0), 1);
+            alphaNow = min(0.85, alphaBase + 0.3*progress);
+            [nCA, nDA] = computeArchiveSizes(N, M, alphaNow, minDAShare);
+
             CA = UpdateCA_VaEA(CA, Union, nCA, zmin, zmax);
             DA = UpdateDA_VaEA(DA, Union, nDA, zmin, zmax, nSeed);
+            CA = VaEAUtils.RefineWithSeeds(CA, DA, nCA, zmin, zmax);
+        end
+        function [nCA, nDA] = computeArchiveSizes(Npop, Mobj, alphaNow, minDAShareNow)
+            if Npop <= 1
+                nCA = Npop;
+                nDA = 0;
+                return;
+            end
+
+            minDA = max(1, min(Npop-1, ceil(minDAShareNow*Npop)));
+            nCA = ceil(alphaNow*Npop);
+            nCA = min(nCA, Npop - minDA);
+            nCA = max(nCA, min(Npop-1, max(1, Mobj)));
+            if nCA >= Npop
+                nCA = Npop - 1;
+            end
+            nDA = max(1, Npop - nCA);
         end
     end
 end
