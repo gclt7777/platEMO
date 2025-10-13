@@ -18,11 +18,23 @@ methods
         [alpha, nSeed, opMode, kLatent, Knn, etaC, etaM, pm] = ...
             Algorithm.ParameterSet(0.6, M, 1, kDefault, 5, 20, 20, 1/max(2,kDefault));
 
+        alphaBase = alpha;
+        maxFE = max(Problem.maxFE, 1);
+
         % 初始化
         Population = Problem.Initialization();
         N  = Problem.N;
-        nCA = ceil(alpha*N);
-        nDA = N - nCA;
+        nCA = max(1, min(N-1, ceil(alpha*N)));
+        if nCA >= N
+            nCA = N-1;
+        end
+        if nCA < M
+            nCA = min(max(M,1), N-1);
+        end
+        nDA = max(1, N - nCA);
+        if nCA + nDA > N
+            nCA = N - nDA;
+        end
 
         % 首次归一化边界（全局）
         [~, zmin, zmax] = VaEAUtils.NormalizeObjs(Population.objs, [], []);
@@ -33,6 +45,8 @@ methods
 
         while Algorithm.NotTerminated([CA, DA])
             Pool = [CA, DA];
+
+            progress = min(max(Algorithm.FE/maxFE, 0), 1);
 
             if opMode == 0
                 % —— 决策空间：沿用 PlatEMO 的 OperatorGA ——
@@ -55,7 +69,9 @@ methods
                 Z2 = VaEAUtils.AE_Encode(P2.objs, zminAE, zmaxAE, mu, W);
 
                 % 潜空间 SBX + 高斯突变（自适应方差）
-                Zc = VaEAUtils.SBX_PM(Z1, Z2, etaC, etaM, pm);
+                pmStage = max(0.05, pm*(1 - 0.5*progress));
+                shrink  = max(0.2, 1 - 0.7*progress);
+                Zc = VaEAUtils.SBX_PM(Z1, Z2, etaC, etaM, pmStage, shrink);
 
                 % 解码回“归一化目标空间”并裁剪到[0,1]
                 YN = VaEAUtils.AE_Decode(Zc, mu, W);
@@ -74,8 +90,23 @@ methods
             [~, zmin, zmax] = VaEAUtils.NormalizeObjs(Union.objs, [], []);
 
             % 两档更新（VaEA思想）
+            progress = min(max(Algorithm.FE/maxFE, 0), 1);
+            alphaNow = min(0.95, alphaBase + (1 - alphaBase)*progress);
+            nCA = max(1, min(N-1, ceil(alphaNow*N)));
+            if nCA >= N
+                nCA = N-1;
+            end
+            if nCA < M
+                nCA = min(max(M,1), N-1);
+            end
+            nDA = max(1, N - nCA);
+            if nCA + nDA > N
+                nCA = N - nDA;
+            end
+
             CA = UpdateCA_VaEA(CA, Union, nCA, zmin, zmax);
             DA = UpdateDA_VaEA(DA, Union, nDA, zmin, zmax, nSeed);
+            CA = VaEAUtils.RefineWithSeeds(CA, DA, zmin, zmax);
         end
     end
 end
