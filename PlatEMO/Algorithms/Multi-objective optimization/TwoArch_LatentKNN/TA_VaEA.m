@@ -46,7 +46,7 @@ methods
         while Algorithm.NotTerminated([CA, DA])
             Pool = [CA, DA];
 
-            progress = min(max(Algorithm.FE/maxFE, 0), 1);
+            progress = min(max(Problem.FE/maxFE, 0), 1);
 
             if opMode == 0
                 % —— 决策空间：沿用 PlatEMO 的 OperatorGA ——
@@ -90,7 +90,7 @@ methods
             [~, zmin, zmax] = VaEAUtils.NormalizeObjs(Union.objs, [], []);
 
             % 两档更新（VaEA思想）
-            progress = min(max(Algorithm.FE/maxFE, 0), 1);
+            progress = min(max(Problem.FE/maxFE, 0), 1);
             alphaNow = min(0.95, alphaBase + (1 - alphaBase)*progress);
             nCA = max(1, min(N-1, ceil(alphaNow*N)));
             if nCA >= N
