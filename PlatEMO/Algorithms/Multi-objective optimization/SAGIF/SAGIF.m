@@ -26,7 +26,7 @@ classdef SAGIF < ALGORITHM
         function main(Algorithm,Problem)
             %% Parameter setting
             [samplingFactor, filterFraction, monteCarloSamples, rngSeed] = ...
-                Algorithm.ParameterSet(0.035, 0.7, 8000, 0);
+                Algorithm.ParameterSet(0.035, 0.7, 2000, 0);
 
             if rngSeed > 0
                 rng(rngSeed, 'twister');
@@ -175,12 +175,53 @@ classdef SAGIF < ALGORITHM
                 hv = 0.0;
                 return;
             end
+
             refPoint = refPoint(:)';
-            points = min(points, refPoint - 1e-9);
+            points   = min(points, refPoint - 1e-9);
+
+            if size(points, 2) <= 3 || sampleCount <= 0
+                hv = SAGIF.exactHypervolume(points, refPoint);
+            else
+                hv = SAGIF.monteCarloHypervolume(points, refPoint, sampleCount);
+            end
+        end
+
+        function hv = exactHypervolume(points, refPoint)
+            points(any(points > refPoint, 2), :) = [];
+            if isempty(points)
+                hv = 0.0;
+                return;
+            end
+
+            segments = {1, sortrows(points)};
+            M = size(points, 2);
+
+            for k = 1:(M-1)
+                newSegments = {};
+                for i = 1:size(segments, 1)
+                    slices = SAGIF.hvSlice(cell2mat(segments(i, 2)), k, refPoint);
+                    for j = 1:size(slices, 1)
+                        temp(1) = {cell2mat(slices(j, 1)) * cell2mat(segments(i, 1))};
+                        temp(2) = slices(j, 2);
+                        newSegments = SAGIF.hvAdd(temp, newSegments);
+                    end
+                end
+                segments = newSegments;
+            end
+
+            hv = 0.0;
+            for i = 1:size(segments, 1)
+                point = SAGIF.hvHead(cell2mat(segments(i, 2)));
+                hv = hv + cell2mat(segments(i, 1)) * abs(point(M) - refPoint(M));
+            end
+        end
+
+        function hv = monteCarloHypervolume(points, refPoint, sampleCount)
+            sampleCount = max(1, round(sampleCount));
             lower = min(points, [], 1);
             lower = min(lower, refPoint - 1.0);
             lower = min(lower, refPoint - 1e-4);
-            span = max(refPoint - lower, 1e-9);
+            span  = max(refPoint - lower, 1e-9);
 
             samples = lower + span .* rand(sampleCount, size(points, 2));
             pointTensor = reshape(points, [size(points, 1), size(points, 2), 1]);
@@ -195,6 +236,86 @@ classdef SAGIF < ALGORITHM
             end
             dominatedAny = any(dominated, 1);
             hv = prod(span) * mean(dominatedAny);
+        end
+
+        function S = hvSlice(pl, k, refPoint)
+            p  = SAGIF.hvHead(pl);
+            pl = SAGIF.hvTail(pl);
+            ql = [];
+            S  = {};
+            while ~isempty(pl)
+                ql  = SAGIF.hvInsert(p, k + 1, ql);
+                p_  = SAGIF.hvHead(pl);
+                cell_(1, 1) = {abs(p(k) - p_(k))};
+                cell_(1, 2) = {ql};
+                S   = SAGIF.hvAdd(cell_, S);
+                p   = p_;
+                pl  = SAGIF.hvTail(pl);
+            end
+            ql = SAGIF.hvInsert(p, k + 1, ql);
+            cell_(1, 1) = {abs(p(k) - refPoint(k))};
+            cell_(1, 2) = {ql};
+            S  = SAGIF.hvAdd(cell_, S);
+        end
+
+        function ql = hvInsert(p, k, pl)
+            flag1 = 0;
+            flag2 = 0;
+            ql    = [];
+            hp    = SAGIF.hvHead(pl);
+            while ~isempty(pl) && hp(k) < p(k)
+                ql = [ql; hp];
+                pl = SAGIF.hvTail(pl);
+                hp = SAGIF.hvHead(pl);
+            end
+            ql = [ql; p];
+            m  = length(p);
+            while ~isempty(pl)
+                q = SAGIF.hvHead(pl);
+                for i = k:m
+                    if p(i) < q(i)
+                        flag1 = 1;
+                    elseif p(i) > q(i)
+                        flag2 = 1;
+                    end
+                end
+                if ~(flag1 == 1 && flag2 == 0)
+                    ql = [ql; SAGIF.hvHead(pl)];
+                end
+                pl = SAGIF.hvTail(pl);
+            end
+        end
+
+        function p = hvHead(pl)
+            if isempty(pl)
+                p = [];
+            else
+                p = pl(1, :);
+            end
+        end
+
+        function ql = hvTail(pl)
+            if size(pl, 1) < 2
+                ql = [];
+            else
+                ql = pl(2:end, :);
+            end
+        end
+
+        function S_ = hvAdd(cell_, S)
+            n = size(S, 1);
+            m = 0;
+            for k = 1:n
+                if isequal(cell_(1, 2), S(k, 2))
+                    S(k, 1) = {cell2mat(S(k, 1)) + cell2mat(cell_(1, 1))};
+                    m = 1;
+                    break;
+                end
+            end
+            if m == 0
+                S(n + 1, :) = cell_(1, :);
+            end
+            S_ = S;
         end
 
         function filtered = l1Filter(objs, remaining, selectedObjs, fraction)
