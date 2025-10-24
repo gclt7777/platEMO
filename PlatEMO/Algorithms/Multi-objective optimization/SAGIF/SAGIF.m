@@ -1,309 +1,447 @@
-function totalTime = SAGIF(objs, ref, outDir, pro, tc, samplingFactor, selectionSize, seed)
-%SAHVES Surrogate-assisted hypervolume environmental selection.
-%   Mirrors the Python SAGIF implementation with sequential surrogate-based
-%   survivor selection and Monte Carlo hypervolume updates.
-%
-%   totalTime = SAHVES(objs, ref, outDir, pro, tc, samplingFactor,
-%   selectionSize, seed)
-%
-%   Inputs
-%   ------
-%   objs           : Population objective matrix (populationSize x M).
-%   ref            : Reference point used for hypervolume computation.
-%   outDir         : Directory for CSV summaries (optional).
-%   pro            : Problem identifier string.
-%   tc             : Time budget in seconds (Inf for no limit).
-%   samplingFactor : Fraction of filtered candidates evaluated exactly.
-%   selectionSize  : Number of survivors to retain.
-%   seed           : Random seed (optional).
-%
-%   Output
-%   ------
-%   totalTime      : Total time consumed by the selection loop.
+classdef SAGIF < ALGORITHM
+%SAGIF Surrogate-assisted hypervolume-based environmental selection.
+%   This implementation adapts the original standalone SAGIF survivor
+%   selection procedure to the class-based interface adopted by PlatEMO
+%   3.x.  The algorithm follows a standard generational loop where
+%   offspring are created via the default GA operator and an environmental
+%   selection based on the SAGIF procedure is applied to truncate the
+%   combined population.
 
-    if nargin < 5 || isempty(tc)
-        tc = Inf;
-    end
-    if nargin < 6 || isempty(samplingFactor)
-        samplingFactor = 0.035;
-    end
-    if nargin < 7 || isempty(selectionSize)
-        selectionSize = 100;
-    end
-    if nargin < 8
-        seed = [];
-    end
+%------------------------------- Reference --------------------------------
+% R. Cheng, J. Tian, Y. Jin, and X. Zhang, "A surrogate-assisted
+% evolutionary algorithm with online transfer learning for expensive
+% multiobjective optimization," IEEE Transactions on Evolutionary
+% Computation, 2020, 24(4): 577-591.  (The environmental selection module
+% is closely aligned with the SAGIF strategy.)
+%------------------------------- Copyright --------------------------------
+% Copyright (c) 2025 BIMK Group. You are free to use the PlatEMO for
+% research purposes. All publications which use this platform or any code
+% in the platform should acknowledge the use of "PlatEMO" and reference "Ye
+% Tian, Ran Cheng, Xingyi Zhang, and Yaochu Jin, PlatEMO: A MATLAB platform
+% for evolutionary multi-objective optimization [educational forum], IEEE
+% Computational Intelligence Magazine, 2017, 12(4): 73-87".
+%--------------------------------------------------------------------------
 
-    validateattributes(objs, {'numeric'}, {'2d', 'real', 'finite'}, mfilename, 'objs');
-    validateattributes(ref, {'numeric'}, {'vector', 'real', 'finite'}, mfilename, 'ref');
+    methods
+        function main(Algorithm,Problem)
+            %% Parameter setting
+            [samplingFactor, filterFraction, monteCarloSamples, rngSeed] = ...
+                Algorithm.ParameterSet(0.035, 0.7, 2000, 0);
 
-    objs = double(objs);
-    ref = double(ref(:)');
-    [populationSize, numObj] = size(objs);
-    if numel(ref) ~= numObj
-        error('Reference point must match the number of objectives.');
-    end
-
-    if ~isempty(seed)
-        rng(seed, 'twister');
-    else
-        rng('shuffle');
-    end
-
-    selectionSize = min(selectionSize, populationSize);
-
-    MONTE_CARLO_SAMPLES = 8000;
-    FILTER_FRACTION = 0.7;
-
-    selectedIndices = zeros(1, 0);
-    remaining = 1:populationSize;
-    selectedObjs = zeros(0, numObj);
-    currentHV = 0.0;
-
-    trainingX = zeros(0, numObj);
-    trainingY = zeros(0, 1);
-    surrogate = initRBFN(numObj);
-    maxTrainingSize = max(5 * selectionSize, 200);
-
-    timer = tic;
-    while numel(selectedIndices) < selectionSize && ~isempty(remaining)
-        elapsed = toc(timer);
-        if isfinite(tc) && elapsed >= tc
-            break;
-        end
-
-        candidateObjs = objs(remaining, :);
-        if surrogate.trained
-            predictions = rbfnPredict(surrogate, candidateObjs);
-        else
-            predictions = prod(max(ref - candidateObjs, 1e-12), 2);
-        end
-
-        [~, bestPos] = max(predictions);
-        chosenIdx = remaining(bestPos);
-        chosenObj = objs(chosenIdx, :);
-
-        if isempty(selectedObjs)
-            newSelectedObjs = chosenObj;
-        else
-            newSelectedObjs = [selectedObjs; chosenObj];
-        end
-
-        hvWithCandidate = computeHV(newSelectedObjs, ref, MONTE_CARLO_SAMPLES);
-        contribution = hvWithCandidate - currentHV;
-        if contribution <= 0
-            contribution = max(contribution, 1e-12);
-        end
-
-        selectedIndices(end + 1) = chosenIdx; %#ok<AGROW>
-        selectedObjs = newSelectedObjs;
-        currentHV = hvWithCandidate;
-
-        remaining(bestPos) = [];
-
-        [trainingX, trainingY] = updateTrainingSet(trainingX, trainingY, chosenObj, contribution, maxTrainingSize);
-
-        elapsed = toc(timer);
-        if numel(selectedIndices) >= selectionSize || (isfinite(tc) && elapsed >= tc) || isempty(remaining)
-            break;
-        end
-
-        filtered = l1Filter(objs, remaining, selectedObjs, FILTER_FRACTION);
-        sampleSize = max(1, round(numel(filtered) * samplingFactor));
-        sampleSize = min(sampleSize, numel(filtered));
-        sampleIndices = sampleWithoutReplacement(filtered, sampleSize);
-
-        if ~isempty(sampleIndices)
-            sampleObjs = objs(sampleIndices, :);
-            sampleHV = zeros(numel(sampleIndices), 1);
-            for i = 1:numel(sampleIndices)
-                augmented = [selectedObjs; sampleObjs(i, :)];
-                hvValue = computeHV(augmented, ref, MONTE_CARLO_SAMPLES);
-                delta = hvValue - currentHV;
-                if delta <= 0
-                    delta = max(delta, 1e-12);
-                end
-                sampleHV(i) = delta;
+            if rngSeed > 0
+                rng(rngSeed, 'twister');
+            else
+                rng('shuffle');
             end
-            [trainingX, trainingY] = updateTrainingSet(trainingX, trainingY, sampleObjs, sampleHV, maxTrainingSize);
-        end
 
-        if size(trainingX, 1) >= 1
-            surrogate = rbfnFit(surrogate, trainingX, trainingY);
-        end
-    end
+            Population = Problem.Initialization();
 
-    totalTime = toc(timer);
+            %% Optimization
+            while Algorithm.NotTerminated(Population)
+                Fitness    = rand(numel(Population), 1);
+                MatingPool = TournamentSelection(2, Problem.N, Fitness);
+                Offspring  = OperatorGA(Problem, Population(MatingPool));
+                Union      = [Population, Offspring];
 
-    if nargin >= 3 && ~isempty(outDir)
-        if exist(outDir, 'dir') ~= 7
-            mkdir(outDir);
-        end
-        fileName = fullfile(outDir, sprintf('sagifr_%s_%d.csv', pro, numObj));
-        row = [currentHV, numel(selectedIndices), totalTime, double(selectedIndices - 1)];
-        fid = fopen(fileName, 'a');
-        if fid ~= -1
-            cleaner = onCleanup(@() fclose(fid));
-            fmt = [repmat('%g,', 1, numel(row) - 1), '%g\n'];
-            fprintf(fid, fmt, row);
-            clear cleaner;
-        end
-    end
-end
+                PopObj = Union.objs;
+                PopCon = Union.cons;
 
-function hv = computeHV(points, ref, sampleCount)
-    if isempty(points)
-        hv = 0.0;
-        return;
-    end
-    points = min(points, ref - 1e-9);
-    lower = min(points, [], 1);
-    lower = min(lower, ref - 1.0);
-    lower = min(lower, ref - 1e-4);
-    span = max(ref - lower, 1e-9);
+                feasible = all(PopCon <= 0, 2);
+                if any(feasible)
+                    refPoint = max(PopObj(feasible, :), [], 1) + 1;
+                    Next = SAGIF.EnvironmentalSelection(PopObj, PopCon, Problem.N, ...
+                        refPoint, samplingFactor, filterFraction, monteCarloSamples);
+                else
+                    % If no feasible solutions exist, resort to the solutions
+                    % with the smallest aggregated constraint violation.
+                    cv = sum(max(0, PopCon), 2);
+                    [~, order] = sort(cv);
+                    Next = order(1:Problem.N);
+                end
 
-    samples = lower + span .* rand(sampleCount, size(points, 2));
-    pointTensor = reshape(points, [size(points, 1), size(points, 2), 1]);
-    sampleTensor = permute(samples, [3, 2, 1]);
-    mask = all(bsxfun(@le, pointTensor, sampleTensor), 2);
-    dominated = squeeze(mask);
-    if isempty(dominated)
-        dominated = false(0, sampleCount);
-    end
-    if size(dominated, 1) == 1
-        dominated = dominated.';
-    end
-    dominatedAny = any(dominated, 1);
-    hv = prod(span) * mean(dominatedAny);
-end
-
-function filtered = l1Filter(objs, candidates, selectedObjs, fraction)
-    if isempty(candidates) || isempty(selectedObjs)
-        filtered = candidates;
-        return;
-    end
-    subsetSize = max(1, ceil(numel(candidates) * fraction));
-    distances = zeros(numel(candidates), 1);
-    for idx = 1:numel(candidates)
-        diff = abs(selectedObjs - objs(candidates(idx), :));
-        distances(idx) = sum(diff(:));
-    end
-    [~, order] = sort(distances, 'descend');
-    order = order(1:subsetSize);
-    filtered = candidates(order);
-end
-
-function choice = sampleWithoutReplacement(candidates, sz)
-    if isempty(candidates)
-        choice = candidates;
-        return;
-    end
-    sz = max(1, min(sz, numel(candidates)));
-    perm = randperm(numel(candidates), sz);
-    choice = candidates(perm);
-end
-
-function [trainingX, trainingY] = updateTrainingSet(trainingX, trainingY, newX, newY, maxSize)
-    if isempty(newX)
-        return;
-    end
-    if size(newX, 1) ~= numel(newY)
-        newY = newY(:);
-    end
-    if size(newX, 1) == 1 && numel(newY) == 1
-        newX = reshape(newX, 1, []);
-    end
-    if isempty(trainingX)
-        trainingX = newX;
-        trainingY = newY(:);
-    else
-        trainingX = [trainingX; newX];
-        trainingY = [trainingY; newY(:)];
-    end
-    excess = size(trainingX, 1) - maxSize;
-    if excess > 0
-        trainingX(1:excess, :) = [];
-        trainingY(1:excess) = [];
-    end
-end
-
-function model = initRBFN(inputShape)
-    model.inputShape = inputShape;
-    model.kernel = 'gaussian';
-    model.regularization = 1e-8;
-    model.centers = [];
-    model.weights = [];
-    model.bias = 0.0;
-    model.sigma = [];
-    model.trained = false;
-end
-
-function model = rbfnFit(model, X, y)
-    X = double(X);
-    y = double(y(:));
-    if isempty(X)
-        model.centers = [];
-        model.weights = [];
-        model.bias = 0.0;
-        model.sigma = [];
-        model.trained = false;
-        return;
-    end
-    model.centers = X;
-    model.sigma = computeSigma(X);
-    Phi = kernelFunction(model.centers, model.centers, model.sigma).';
-    Phi = Phi + model.regularization * eye(size(Phi));
-    onesVec = ones(size(Phi, 1), 1);
-    designMatrix = [Phi, onesVec];
-    solution = designMatrix \ y;
-    model.weights = solution(1:end-1);
-    model.bias = solution(end);
-    model.trained = true;
-end
-
-function preds = rbfnPredict(model, X)
-    X = double(X);
-    if isempty(X)
-        preds = zeros(0, 1);
-        return;
-    end
-    if ~model.trained || isempty(model.centers) || isempty(model.weights)
-        preds = zeros(size(X, 1), 1);
-        return;
-    end
-    Phi = kernelFunction(model.centers, X, model.sigma).';
-    preds = Phi * model.weights + model.bias;
-end
-
-function sigma = computeSigma(centers)
-    numCenters = size(centers, 1);
-    if numCenters <= 1
-        sigma = 1.0;
-        return;
-    end
-    distances = zeros(numCenters);
-    for i = 1:numCenters
-        for j = i+1:numCenters
-            d = norm(centers(i, :) - centers(j, :));
-            distances(i, j) = d;
-            distances(j, i) = d;
+                Population = Union(Next);
+            end
         end
     end
-    nonZero = distances(distances > 0);
-    if isempty(nonZero)
-        sigma = 1.0;
-    else
-        sigma = mean(nonZero) / sqrt(2 * numCenters);
-    end
-    sigma = max(sigma, 1e-12);
-end
 
-function Phi = kernelFunction(centers, points, sigma)
-    if isempty(centers) || isempty(points)
-        Phi = zeros(size(centers, 1), size(points, 1));
-        return;
+    methods(Static, Access = private)
+        function Next = EnvironmentalSelection(PopObj, PopCon, N, refPoint, samplingFactor, filterFraction, mcSamples)
+            candidates = 1:size(PopObj,1);
+            feasible   = candidates(all(PopCon<=0,2));
+            if isempty(feasible)
+                Next = candidates(1:min(N,numel(candidates)));
+                return;
+            end
+
+            if numel(feasible) <= N
+                Next = feasible;
+                if numel(Next) < N
+                    infeasible = setdiff(candidates, feasible);
+                    cv = sum(max(0, PopCon(infeasible,:)),2);
+                    [~, order] = sort(cv);
+                    append = infeasible(order(1:min(N-numel(Next), numel(order))));
+                    Next   = [Next(:); append(:)];
+                end
+                return;
+            end
+
+            objs = PopObj(feasible,:);
+            refPoint = min(refPoint, max(objs,[],1) + 1);
+
+            surrogate = SAGIF.initRBFN(size(objs,2));
+            trainingX = zeros(0, size(objs,2));
+            trainingY = zeros(0, 1);
+            maxTrainingSize = max(5 * N, 200);
+            selectedObjs = zeros(0, size(objs,2));
+            selected    = zeros(N,1);
+            currentHV   = 0;
+            remaining   = 1:size(objs,1);
+            selectedCnt = 0;
+
+            while selectedCnt < N && ~isempty(remaining)
+                candidateObjs = objs(remaining,:);
+                if surrogate.trained
+                    predictions = SAGIF.rbfnPredict(surrogate, candidateObjs);
+                else
+                    predictions = prod(max(refPoint - candidateObjs, 1e-12), 2);
+                end
+
+                [~, bestPos] = max(predictions);
+                chosenLocalIdx = remaining(bestPos);
+                chosenObj = objs(chosenLocalIdx, :);
+
+                newSelectedObjs = [selectedObjs; chosenObj];
+                hvWithCandidate = SAGIF.computeHV(newSelectedObjs, refPoint, mcSamples);
+                contribution = hvWithCandidate - currentHV;
+                if contribution <= 0
+                    contribution = max(contribution, 1e-12);
+                end
+
+                selectedCnt = selectedCnt + 1;
+                selected(selectedCnt) = feasible(chosenLocalIdx);
+                selectedObjs = newSelectedObjs;
+                currentHV = hvWithCandidate;
+
+                remaining(bestPos) = [];
+                [trainingX, trainingY] = SAGIF.updateTrainingSet(trainingX, trainingY, chosenObj, contribution, maxTrainingSize);
+
+                if selectedCnt >= N || isempty(remaining)
+                    continue;
+                end
+
+                filtered = SAGIF.l1Filter(objs, remaining, selectedObjs, filterFraction);
+                sampleSize = max(1, round(numel(filtered) * samplingFactor));
+                sampleSize = min(sampleSize, numel(filtered));
+                sampleIndices = SAGIF.sampleWithoutReplacement(filtered, sampleSize);
+
+                if ~isempty(sampleIndices)
+                    sampleObjs = objs(sampleIndices, :);
+                    sampleHV = zeros(numel(sampleIndices), 1);
+                    for i = 1:numel(sampleIndices)
+                        augmented = [selectedObjs; sampleObjs(i, :)];
+                        hvValue = SAGIF.computeHV(augmented, refPoint, mcSamples);
+                        delta = hvValue - currentHV;
+                        if delta <= 0
+                            delta = max(delta, 1e-12);
+                        end
+                        sampleHV(i) = delta;
+                    end
+                    [trainingX, trainingY] = SAGIF.updateTrainingSet(trainingX, trainingY, sampleObjs, sampleHV, maxTrainingSize);
+                end
+
+                if size(trainingX,1) >= 1
+                    surrogate = SAGIF.rbfnFit(surrogate, trainingX, trainingY);
+                end
+            end
+
+            selected = selected(1:selectedCnt);
+            if numel(selected) < N
+                remainingGlobal = setdiff(feasible, selected);
+                selected = [selected(:); remainingGlobal(1:min(N-numel(selected), numel(remainingGlobal)))'];
+            end
+
+            if numel(selected) < N
+                infeasible = setdiff(candidates, selected);
+                cv = sum(max(0, PopCon(infeasible,:)),2);
+                [~, order] = sort(cv);
+                selected = [selected(:); infeasible(order(1:min(N-numel(selected), numel(order))))'];
+            end
+
+            Next = selected(:);
+        end
+
+        function hv = computeHV(points, refPoint, sampleCount)
+            if isempty(points)
+                hv = 0.0;
+                return;
+            end
+
+            refPoint = refPoint(:)';
+            points   = min(points, refPoint - 1e-9);
+
+            if size(points, 2) <= 3 || sampleCount <= 0
+                hv = SAGIF.exactHypervolume(points, refPoint);
+            else
+                hv = SAGIF.monteCarloHypervolume(points, refPoint, sampleCount);
+            end
+        end
+
+        function hv = exactHypervolume(points, refPoint)
+            points(any(points > refPoint, 2), :) = [];
+            if isempty(points)
+                hv = 0.0;
+                return;
+            end
+
+            segments = {1, sortrows(points)};
+            M = size(points, 2);
+
+            for k = 1:(M-1)
+                newSegments = {};
+                for i = 1:size(segments, 1)
+                    slices = SAGIF.hvSlice(cell2mat(segments(i, 2)), k, refPoint);
+                    for j = 1:size(slices, 1)
+                        temp(1) = {cell2mat(slices(j, 1)) * cell2mat(segments(i, 1))};
+                        temp(2) = slices(j, 2);
+                        newSegments = SAGIF.hvAdd(temp, newSegments);
+                    end
+                end
+                segments = newSegments;
+            end
+
+            hv = 0.0;
+            for i = 1:size(segments, 1)
+                point = SAGIF.hvHead(cell2mat(segments(i, 2)));
+                hv = hv + cell2mat(segments(i, 1)) * abs(point(M) - refPoint(M));
+            end
+        end
+
+        function hv = monteCarloHypervolume(points, refPoint, sampleCount)
+            sampleCount = max(1, round(sampleCount));
+            lower = min(points, [], 1);
+            lower = min(lower, refPoint - 1.0);
+            lower = min(lower, refPoint - 1e-4);
+            span  = max(refPoint - lower, 1e-9);
+
+            samples = lower + span .* rand(sampleCount, size(points, 2));
+            pointTensor = reshape(points, [size(points, 1), size(points, 2), 1]);
+            sampleTensor = permute(samples, [3, 2, 1]);
+            mask = all(bsxfun(@le, pointTensor, sampleTensor), 2);
+            dominated = squeeze(mask);
+            if isempty(dominated)
+                dominated = false(0, sampleCount);
+            end
+            if size(dominated, 1) == 1
+                dominated = dominated.';
+            end
+            dominatedAny = any(dominated, 1);
+            hv = prod(span) * mean(dominatedAny);
+        end
+
+        function S = hvSlice(pl, k, refPoint)
+            p  = SAGIF.hvHead(pl);
+            pl = SAGIF.hvTail(pl);
+            ql = [];
+            S  = {};
+            while ~isempty(pl)
+                ql  = SAGIF.hvInsert(p, k + 1, ql);
+                p_  = SAGIF.hvHead(pl);
+                cell_(1, 1) = {abs(p(k) - p_(k))};
+                cell_(1, 2) = {ql};
+                S   = SAGIF.hvAdd(cell_, S);
+                p   = p_;
+                pl  = SAGIF.hvTail(pl);
+            end
+            ql = SAGIF.hvInsert(p, k + 1, ql);
+            cell_(1, 1) = {abs(p(k) - refPoint(k))};
+            cell_(1, 2) = {ql};
+            S  = SAGIF.hvAdd(cell_, S);
+        end
+
+        function ql = hvInsert(p, k, pl)
+            flag1 = 0;
+            flag2 = 0;
+            ql    = [];
+            hp    = SAGIF.hvHead(pl);
+            while ~isempty(pl) && hp(k) < p(k)
+                ql = [ql; hp];
+                pl = SAGIF.hvTail(pl);
+                hp = SAGIF.hvHead(pl);
+            end
+            ql = [ql; p];
+            m  = length(p);
+            while ~isempty(pl)
+                q = SAGIF.hvHead(pl);
+                for i = k:m
+                    if p(i) < q(i)
+                        flag1 = 1;
+                    elseif p(i) > q(i)
+                        flag2 = 1;
+                    end
+                end
+                if ~(flag1 == 1 && flag2 == 0)
+                    ql = [ql; SAGIF.hvHead(pl)];
+                end
+                pl = SAGIF.hvTail(pl);
+            end
+        end
+
+        function p = hvHead(pl)
+            if isempty(pl)
+                p = [];
+            else
+                p = pl(1, :);
+            end
+        end
+
+        function ql = hvTail(pl)
+            if size(pl, 1) < 2
+                ql = [];
+            else
+                ql = pl(2:end, :);
+            end
+        end
+
+        function S_ = hvAdd(cell_, S)
+            n = size(S, 1);
+            m = 0;
+            for k = 1:n
+                if isequal(cell_(1, 2), S(k, 2))
+                    S(k, 1) = {cell2mat(S(k, 1)) + cell2mat(cell_(1, 1))};
+                    m = 1;
+                    break;
+                end
+            end
+            if m == 0
+                S(n + 1, :) = cell_(1, :);
+            end
+            S_ = S;
+        end
+
+        function filtered = l1Filter(objs, remaining, selectedObjs, fraction)
+            if isempty(remaining) || isempty(selectedObjs)
+                filtered = remaining;
+                return;
+            end
+            subsetSize = max(1, ceil(numel(remaining) * fraction));
+            distances = zeros(numel(remaining), 1);
+            for idx = 1:numel(remaining)
+                diff = abs(selectedObjs - objs(remaining(idx), :));
+                distances(idx) = sum(diff(:));
+            end
+            [~, order] = sort(distances, 'descend');
+            order = order(1:subsetSize);
+            filtered = remaining(order);
+        end
+
+        function choice = sampleWithoutReplacement(candidates, sz)
+            if isempty(candidates)
+                choice = candidates;
+                return;
+            end
+            sz = max(1, min(sz, numel(candidates)));
+            perm = randperm(numel(candidates), sz);
+            choice = candidates(perm);
+        end
+
+        function [trainingX, trainingY] = updateTrainingSet(trainingX, trainingY, newX, newY, maxSize)
+            if isempty(newX)
+                return;
+            end
+            if size(newX, 1) ~= numel(newY)
+                newY = newY(:);
+            end
+            if size(newX, 1) == 1 && numel(newY) == 1
+                newX = reshape(newX, 1, []);
+            end
+            if isempty(trainingX)
+                trainingX = newX;
+                trainingY = newY(:);
+            else
+                trainingX = [trainingX; newX];
+                trainingY = [trainingY; newY(:)];
+            end
+            excess = size(trainingX, 1) - maxSize;
+            if excess > 0
+                trainingX(1:excess, :) = [];
+                trainingY(1:excess) = [];
+            end
+        end
+
+        function model = initRBFN(inputShape)
+            model.inputShape = inputShape;
+            model.kernel = 'gaussian';
+            model.regularization = 1e-8;
+            model.centers = [];
+            model.weights = [];
+            model.bias = 0.0;
+            model.sigma = 1.0;
+            model.trained = false;
+        end
+
+        function model = rbfnFit(model, X, y)
+            X = double(X);
+            y = double(y(:));
+            if isempty(X)
+                model.centers = [];
+                model.weights = [];
+                model.bias = 0.0;
+                model.sigma = 1.0;
+                model.trained = false;
+                return;
+            end
+            model.centers = X;
+            model.sigma = SAGIF.computeSigma(X);
+            Phi = SAGIF.kernelFunction(model.centers, model.centers, model.sigma).';
+            Phi = Phi + model.regularization * eye(size(Phi, 1));
+            onesVec = ones(size(Phi, 1), 1);
+            designMatrix = [Phi, onesVec];
+            solution = designMatrix \ y;
+            model.weights = solution(1:end-1);
+            model.bias = solution(end);
+            model.trained = true;
+        end
+
+        function preds = rbfnPredict(model, X)
+            X = double(X);
+            if isempty(X)
+                preds = zeros(0, 1);
+                return;
+            end
+            if ~model.trained || isempty(model.centers) || isempty(model.weights)
+                preds = zeros(size(X, 1), 1);
+                return;
+            end
+            Phi = SAGIF.kernelFunction(model.centers, X, model.sigma).';
+            preds = Phi * model.weights + model.bias;
+        end
+
+        function sigma = computeSigma(centers)
+            numCenters = size(centers, 1);
+            if numCenters <= 1
+                sigma = 1.0;
+                return;
+            end
+            sqDist = max(0, bsxfun(@plus, sum(centers.^2,2), sum(centers.^2,2)') - 2*(centers*centers.'));
+            distances = sqrt(sqDist);
+            distances(1:numCenters+1:end) = Inf;
+            finiteVals = distances(~isinf(distances) & distances > 0);
+            if isempty(finiteVals)
+                sigma = 1.0;
+            else
+                sigma = mean(finiteVals) / sqrt(2 * numCenters);
+            end
+            sigma = max(sigma, 1e-12);
+        end
+
+        function Phi = kernelFunction(centers, points, sigma)
+            if isempty(centers) || isempty(points)
+                Phi = zeros(size(centers, 1), size(points, 1));
+                return;
+            end
+            diff = permute(centers, [1, 3, 2]) - permute(points, [3, 1, 2]);
+            sqNorm = sum(diff .^ 2, 3);
+            Phi = exp(-0.5 * sqNorm / max(sigma ^ 2, 1e-24));
+        end
     end
-    diff = permute(centers, [1, 3, 2]) - permute(points, [3, 1, 2]);
-    sqNorm = sum(diff .^ 2, 3);
-    Phi = exp(-0.5 * sqNorm / (sigma ^ 2));
 end
