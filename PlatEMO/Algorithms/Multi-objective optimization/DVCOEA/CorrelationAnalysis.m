@@ -1,26 +1,27 @@
-function CVSet = CorrelationAnalysis(Global,Population,CV,nCor)
-% Detect the group of each distance variable  
-    CVSet = {};
-    for v = CV
-        RelatedSet = [];
+function CVSet = CorrelationAnalysis(Problem,Population,CV,nCor)
+% Detect the group of each convergence-related variable
+
+    CVSet = cell(0);
+    for v = CV(:)'
+        related = [];
         for d = 1 : length(CVSet)
-            for u = CVSet{d}
-                drawnow();
-                sign = false;
+            group = CVSet{d};
+            sign  = false;
+            for u = group
                 for i = 1 : nCor
                     p    = Population(randi(length(Population)));
-                    a2   = unifrnd(Global.lower(v),Global.upper(v));
-                    b2   = unifrnd(Global.lower(u),Global.upper(u));
+                    a2   = unifrnd(Problem.lower(v),Problem.upper(v));
+                    b2   = unifrnd(Problem.lower(u),Problem.upper(u));
                     decs = repmat(p.dec,3,1);
                     decs(1,v)     = a2;
                     decs(2,u)     = b2;
                     decs(3,[v,u]) = [a2,b2];
-                    F = INDIVIDUAL(decs);
-                    delta1 = F(1).obj - p.obj;
-                    delta2 = F(3).obj - F(2).obj;
+                    F = Problem.Evaluation(decs);
+                    delta1 = F(1).objs - p.objs;
+                    delta2 = F(3).objs - F(2).objs;
                     if any(delta1.*delta2<0)
                         sign = true;
-                        RelatedSet = [RelatedSet,d];
+                        related = [related,d]; %#ok<AGROW>
                         break;
                     end
                 end
@@ -29,11 +30,12 @@ function CVSet = CorrelationAnalysis(Global,Population,CV,nCor)
                 end
             end
         end
-        if isempty(RelatedSet)
-            CVSet = [CVSet,v];
+        if isempty(related)
+            CVSet{end+1} = v; %#ok<AGROW>
         else
-            CVSet = [CVSet,[cell2mat(CVSet(RelatedSet)),v]];
-            CVSet(RelatedSet) = [];
+            merged = unique([CVSet{related},v]);
+            CVSet(related) = [];
+            CVSet{end+1} = merged; %#ok<AGROW>
         end
     end
 end
