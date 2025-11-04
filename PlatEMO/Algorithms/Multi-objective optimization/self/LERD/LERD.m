@@ -1,83 +1,103 @@
-function LERD(Global)
-% <algorithm> <L>
-    %% Initalization of population and structure
-    [sN,N,gen]   = Global.ParameterSet(3,10,20);
-    [W,Global.N] = UniformPoint(Global.N,Global.M); 
-    Population   = Global.Initialization();
-    Population   = EvolveByMOEAD(Global,Population,W,20);
-    Par          = struct('N',N,'sN',sN,'Dec',rand(N,Global.D)>0.5,...
-                          'fit',zeros(N,2),'gen',gen,'t',1);
-    %% Optimization
-    while Global.NotTermination(Population)
-        for iii = 1:100
-        t0 = Global.evaluated;
-        [Par,NewPop] = ReformulatedOptimization(Global,Population,Par);
-        Population   = EnvironmentSelection([Population,NewPop],Global.N);
-        for g = 1 : Par.N
-            DV = find(Par.Dec(g,:)==1);
-            Population = SecondOptimization(Global,Population,DV,1);
-            drawnow();
-            PV = find(Par.Dec(g,:)==0);
-            Population = SecondOptimization(Global,Population,PV,1);
-        end
-        deltaG     = ceil((Global.evaluated-t0)/Global.N);
-        Population = EvolveByMOEAD(Global,Population,W,deltaG);
+classdef LERD < ALGORITHM
+% <2024> <multi/many> <real> <large/none>
+% Large-scale evolutionary algorithm with reformulated decision variable analysis
+% sN  ---  3 --- Number of sampled points
+% N   --- 10 --- Population size in DVA optimization
+% gen --- 20 --- Number of iterations for DVA optimization
+
+%------------------------------- Reference --------------------------------
+% C. He, R. Cheng, L. Li, K. C. Tan, and Y. Jin. Large-scale multiobjective
+% optimization via reformulated decision variable analysis. IEEE
+% Transactions on Evolutionary Computation, 2024, 28(1): 47-61.
+%------------------------------- Copyright --------------------------------
+% Copyright (c) 2025 BIMK Group. You are free to use the PlatEMO for
+% research purposes. All publications which use this platform or any code
+% in the platform should acknowledge the use of "PlatEMO" and reference "Ye
+% Tian, Ran Cheng, Xingyi Zhang, and Yaochu Jin, PlatEMO: A MATLAB platform
+% for evolutionary multi-objective optimization [educational forum], IEEE
+% Computational Intelligence Magazine, 2017, 12(4): 73-87".
+%--------------------------------------------------------------------------
+
+% This function is written by Cheng He
+
+    methods
+        function main(Algorithm,Problem)
+            %% Initalization of population and structure
+            [sN,N,gen]   = Algorithm.ParameterSet(3,10,20);
+            [W,Problem.N] = UniformPoint(Problem.N,Problem.M);
+            Population   = Problem.Initialization();
+            Population   = EvolveByMOEAD(Problem,Population,W,20);
+            Par          = struct('N',N,'sN',sN,'Dec',rand(N,Problem.D)>0.5,...
+                                  'fit',zeros(N,2),'gen',gen,'t',1);
+            %% Optimization
+            while Algorithm.NotTerminated(Population)
+                t0 = Problem.FE;
+                [Par,NewPop] = ReformulatedOptimization(Problem,Population,Par);
+                Population   = EnvironmentSelection([Population,NewPop],Problem.N);
+                for g = 1 : Par.N
+                    DV = find(Par.Dec(g,:)==1);
+                    Population = SecondOptimization(Problem,Population,DV,1);
+                    drawnow();
+                    PV = find(Par.Dec(g,:)==0);
+                    Population = SecondOptimization(Problem,Population,PV,1);
+                end
+                deltaG     = ceil((Problem.FE-t0)/Problem.N);
+                Population = EvolveByMOEAD(Problem,Population,W,deltaG);
+            end
         end
     end
 end
 
-
-
-function [Population,fitness] = SparseFit(Global,Archieve,Par,mask)
+function [Population,fitness] = SparseFit(Problem,Archieve,Par,mask)
     Range       = [min(Archieve.objs,[],1);max(Archieve.objs,[],1)];
     fitness     = zeros(Par.N,2);
-	[Dmin,Dmax] = deal(min(Archieve.decs,[],1),max(Archieve.decs,[],1));
+    [Dmin,Dmax] = deal(min(Archieve.decs,[],1),max(Archieve.decs,[],1));
     Upper       = repmat(Dmax,Par.sN,1);
     Lower       = repmat(Dmin,Par.sN,1);
     [~,index]   = min(calCon(Range,Archieve.objs));
-	ArcDec      = repmat(Archieve(index).decs,Par.sN,1);
+    ArcDec      = repmat(Archieve(index).decs,Par.sN,1);
 
-	Population = [];
+    Population = [];
     alpha = 0.25;
     for i = 1 : Par.N
-        tempDec = ArcDec;    
-        noise   = alpha.*unifrnd(0,1,Par.sN,Global.D).*(Upper-Lower);
+        tempDec = ArcDec;
+        noise   = alpha.*unifrnd(0,1,Par.sN,Problem.D).*(Upper-Lower);
         tempDec(:,mask(i,:)) = noise(:,mask(i,:)) ;
-        TEMP         = INDIVIDUAL(tempDec);
+        TEMP         = Problem.Evaluation(tempDec);
         fitness(i,1) = min(calCon(Range,TEMP.objs));
         fitness(i,2) = sum(mask(i,:));
         Population   = [Population,TEMP];
     end
 end
 
-function Population = SecondOptimization(Global,Population,PV,flag)
+function Population = SecondOptimization(Problem,Population,PV,flag)
 % Convergence/Distribution optimization
     N            = length(Population);
     Range        = [min(Population.objs,[],1);max(Population.objs,[],1)];
-	MatingPool   = TournamentSelection(2,N,calCon(Range,Population.objs));
+    MatingPool   = TournamentSelection(2,N,calCon(Range,Population.objs));
     OffDec       = Population(MatingPool).decs;
     if flag == 0
-        NewDec   = OperatorGA(Global,Population(randi(N,1,N+1)).decs);
+        NewDec   = OperatorGA(Problem,Population(randi(N,1,N+1)).decs);
         NewDec   = NewDec(1:N,:);
     else
         next     = randi(N,1,2*N);
-        NewDec   = OperatorDE(Global,Population.decs,Population(next(1:end/2)).decs, ...
+        NewDec   = OperatorDE(Problem,Population.decs,Population(next(1:end/2)).decs, ...
                     Population(next(end/2+1:end)).decs, ...
                     {1,0.5,size(Range,2)/length(PV)/2,20});
     end
     OffDec(:,PV) = NewDec(:,PV);
-    Offspring    = INDIVIDUAL(OffDec);
+    Offspring    = Problem.Evaluation(OffDec);
     Population   = EnvironmentSelection([Population,Offspring],N);
 end
 
-function [Par,TEMP] = ReformulatedOptimization(Global,Population,Par)
-    [TEMP,Par.fit]       = SparseFit(Global,Population,Par,Par.Dec>0);
+function [Par,TEMP] = ReformulatedOptimization(Problem,Population,Par)
+    [TEMP,Par.fit]       = SparseFit(Problem,Population,Par,Par.Dec>0);
     [~,FrontNo,CrowdDis] = FitnessSelection(Par.fit,Par.N);
     for i = 1 : Par.gen
-        MatingPool  = TournamentSelection(2,2*Par.N,FrontNo,-CrowdDis);    
+        MatingPool  = TournamentSelection(2,2*Par.N,FrontNo,-CrowdDis);
         OffMask     = BinaryVariation(Par.Dec(MatingPool(1:Par.N),:), ...
                                       Par.Dec(MatingPool(Par.N+1:end),:));
-        [OffPop,MaskFit] = SparseFit(Global,Population,Par,OffMask>0);         
+        [OffPop,MaskFit] = SparseFit(Problem,Population,Par,OffMask>0);
         TEMP    = [TEMP,OffPop];
         fitness = [Par.fit;MaskFit];
         PopDec  = [Par.Dec;OffMask];

@@ -1,8 +1,8 @@
-function Population = EvolveByMOEAD(Global,Population,W,deltaG)
+function Population = EvolveByMOEAD(Problem,Population,W,deltaG)
 % Uniformity optimization by MOEA/D
 
 %------------------------------- Copyright --------------------------------
-% Copyright (c) 2023 BIMK Group. You are free to use the PlatEMO for
+% Copyright (c) 2025 BIMK Group. You are free to use the PlatEMO for
 % research purposes. All publications which use this platform or any code
 % in the platform should acknowledge the use of "PlatEMO" and reference "Ye
 % Tian, Ran Cheng, Xingyi Zhang, and Yaochu Jin, PlatEMO: A MATLAB platform
@@ -14,38 +14,38 @@ function Population = EvolveByMOEAD(Global,Population,W,deltaG)
     W = W.*repmat(max(Population.objs,[],1)-min(Population.objs,[],1),size(W,1),1);
     B = pdist2(W,W);
     [~,B] = sort(B,2);
-    B = B(:,1:ceil(Global.N/10));
-    
+    B = B(:,1:ceil(Problem.N/10));
+
     %% Associate each subproblem with one solution
     % The ideal point
     Z = min(Population.objs,[],1);
     % The value of each solution on each subproblem (modified Tchebycheff approach)
-    g = zeros(Global.N);
-    for i = 1 : Global.N
-        g(i,:) = max(repmat(abs(Population(i).obj-Z),Global.N,1)./W,[],2)';
+    g = zeros(Problem.N);
+    for i = 1 : Problem.N
+        g(i,:) = max(repmat(abs(Population(i).obj-Z),Problem.N,1)./W,[],2)';
     end
     [~,rank] = sort(g,2);
     % The index of solution which each subproblem associated with
-    associate = zeros(1,Global.N);
-    for i = 1 : Global.N
+    associate = zeros(1,Problem.N);
+    for i = 1 : Problem.N
         x = find(~associate(rank(i,:)),1);
         associate(rank(i,x)) = i;
     end
     Population = Population(associate);
-    
+
     %% Optimization
     for k = 1 : deltaG
         % For each solution
-        for i = 1 : Global.N
+        for i = 1 : Problem.N
             % Choose the parents
             if rand < 0.9
                 P = B(i,randperm(size(B,2)));
             else
-                P = randperm(Global.N);
+                P = randperm(Problem.N);
             end
 
             % Generate an offspring
-            Offspring = OperatorDE(Global,Population(i),Population(P(1)),Population(P(2)));
+            Offspring = OperatorDE(Problem,Population(i),Population(P(1)),Population(P(2)));
             % Update the ideal point
             Z = min(Z,Offspring.obj);
             % Update the solutions in P by modified Tchebycheff approach
