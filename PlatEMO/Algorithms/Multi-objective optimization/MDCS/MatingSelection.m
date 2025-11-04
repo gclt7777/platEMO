@@ -1,9 +1,9 @@
 function [ParentC,ParentM] = MatingSelection(CA,DA,Fit,FE,maxFE,N)
-% 匹配算子选择
+% Parent selection for the collaborative and dominant archives.
 
     if isempty(CA)
-        ParentC = INDIVIDUAL.empty();
-        ParentM = INDIVIDUAL.empty();
+        ParentC = SOLUTION.empty();
+        ParentM = SOLUTION.empty();
         return;
     end
     if isempty(DA)
