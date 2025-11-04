@@ -1,8 +1,8 @@
 function [DA,p] = UpdateDA(DA,New,MaxSize)
 % Update DA
 
-    if isempty(DA)
-        DA = INDIVIDUAL.empty();
+    if nargin < 1 || isempty(DA)
+        DA = SOLUTION.empty();
     end
     if isempty(New)
         if isempty(DA)
