@@ -1,8 +1,8 @@
 function CA = UpdateCA(CA,New,MaxSize,p)
 % Update CA
 
-    if isempty(CA)
-        CA = INDIVIDUAL.empty();
+    if nargin < 1 || isempty(CA)
+        CA = SOLUTION.empty();
     end
     if isempty(New)
         return;
