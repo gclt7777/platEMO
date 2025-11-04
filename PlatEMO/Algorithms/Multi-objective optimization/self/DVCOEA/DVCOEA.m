@@ -1,4 +1,4 @@
-function DVCOEA(Global)
+classdef DVCOEA < ALGORITHM
 % <algorithm> <L>
 % Decomposition-based variable clustering optimization evolutionary algorithm
 % nSel ---  5 --- Number of selected solutions for decision variable clustering
@@ -18,41 +18,45 @@ function DVCOEA(Global)
 % Computational Intelligence Magazine, 2017, 12(4): 73-87".
 %--------------------------------------------------------------------------
 
-    %% Parameter setting
-    [nSel,nPer,nCor] = Global.ParameterSet(5,50,5);
+    methods
+        function main(Algorithm,Problem)
+            %% Parameter setting
+            [nSel,nPer,nCor] = Algorithm.ParameterSet(5,50,5);
 
-    %% Generate random population
-    Population = Global.Initialization();
+            %% Generate random population
+            Population = Problem.Initialization();
 
-    %% Variable clustering and correlation analysis
-    [CV,DV,CO] = VariableClustering(Global,Population,nSel,nPer);
-    CVgroup    = CorrelationAnalysis(Global,Population,CV,nCor);
-    CXV        = [];
-    for i = 1 : length(CVgroup)
-        if numel(CVgroup{i}) > 1
-            CXV = [CXV,CVgroup{i}]; %#ok<AGROW>
-        end
-    end
-    subSet = cell(1,Global.M);
-    for i = 1 : length(CV)
-        conum = length(CO{CV(i)});
-        if conum == 1
-            m = CO{CV(i)};
-        else
-            m = CO{CV(i)}(randi(conum));
-        end
-        subSet{m} = [subSet{m},CV(i)]; %#ok<AGROW>
-    end
+            %% Variable clustering and correlation analysis
+            [CV,DV,CO] = VariableClustering(Problem,Population,nSel,nPer);
+            CVgroup    = CorrelationAnalysis(Problem,Population,CV,nCor);
+            CXV        = [];
+            for i = 1 : length(CVgroup)
+                if numel(CVgroup{i}) > 1
+                    CXV = [CXV,CVgroup{i}]; %#ok<AGROW>
+                end
+            end
+            subSet = cell(1,Problem.M);
+            for i = 1 : length(CV)
+                conum = length(CO{CV(i)});
+                if conum == 1
+                    m = CO{CV(i)};
+                else
+                    m = CO{CV(i)}(randi(conum));
+                end
+                subSet{m} = [subSet{m},CV(i)]; %#ok<AGROW>
+            end
 
-    %% Optimization
-    while Global.NotTermination(Population)
-        % Convergence optimization
-        for m = 1 : Global.M
-            if ~isempty(subSet{m})
-                Population = ConvergenceOptimization(Population,subSet{m});
+            %% Optimization
+            while Algorithm.NotTerminated(Population)
+                % Convergence optimization
+                for m = 1 : Problem.M
+                    if ~isempty(subSet{m})
+                        Population = ConvergenceOptimization(Problem,Population,subSet{m});
+                    end
+                end
+                % Distribution optimization
+                Population = DistributionOptimization(Problem,Population,DV,CXV);
             end
         end
-        % Distribution optimization
-        Population = DistributionOptimization(Population,DV,CXV);
     end
 end

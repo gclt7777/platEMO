@@ -1,7 +1,7 @@
-function Population = DistributionOptimization(Population,DV,CXV)
+function Population = DistributionOptimization(Problem,Population,DV,CXV)
 % Distribution optimization focusing on diversity-related variables
 
-    if nargin < 3
+    if nargin < 4
         CXV = [];
     end
     DV = setdiff(DV,unique(CXV));
@@ -12,9 +12,12 @@ function Population = DistributionOptimization(Population,DV,CXV)
     Fitness = sum(Population.objs,2);
     Parents = Population(TournamentSelection(2,N,Fitness));
     OffDec  = Parents.decs;
-    parentDec = Population(randi(N,1,N)).decs;
-    NewDec  = GA(parentDec);
-    OffDec(:,DV) = NewDec(:,DV);
-    Offspring    = INDIVIDUAL(OffDec);
+    ParentDec = Population(randi(N,1,N)).decs;
+    if mod(size(ParentDec,1),2) == 1
+        ParentDec = ParentDec([1:end,1],:);
+    end
+    NewDec  = OperatorGA(Problem,ParentDec);
+    OffDec(:,DV) = NewDec(1:N,DV);
+    Offspring    = Problem.Evaluation(OffDec);
     Population   = EnvironmentalSelection([Population,Offspring],N);
 end
