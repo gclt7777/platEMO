@@ -34,44 +34,57 @@ function EAGO(Global)
 	[Div_V1,con_V1,con_V_plus] = VariableAnalysis1(Global,Population,nSel,nPer, R1);
  %   pasue();
     first = true;
-	N = Global.N;
-	change = true;
+        N = Global.N;
+        change = true;
+    Problem = Global.problem;
     while Global.NotTermination(Population)
     
     
         % Convergence optimization
-        if Global.evaluated / Global.evaluation < 0.9
-			temp = 10;
-		else
-			temp = 1;
-		end
+        if Problem.FE / Problem.maxFE < 0.9
+                        temp = 10;
+                else
+                        temp = 1;
+                end
         
         
  
-        if change 
+        if change
 
-            
             for j = 1 : temp
-				for ij = 1 : length(con_V)
-					drawnow();
-					Population = ConvergenceOptimization_R(Population,con_V(ij), R,Global);
-				end
-			end
-            
-			
-            for j = 1 : temp			
-				for i = 1 : 1
-					drawnow();
-					Population = DistributionOptimization(Population,Div_V, R,Global);			   
-				end
+                if Problem.FE >= Problem.maxFE
+                        break;
+                end
+                for ij = 1 : length(con_V)
+                        if Problem.FE >= Problem.maxFE
+                                break;
+                        end
+                        drawnow();
+                        Population = ConvergenceOptimization_R(Population,con_V(ij), R,Global);
+                end
+        end
 
-			end
-           
-			change = false;
-		
-		else
-        
-				if rank(Population.objs) == Global.M
+
+            for j = 1 : temp
+                if Problem.FE >= Problem.maxFE
+                        break;
+                end
+                for i = 1 : 1
+                        if Problem.FE >= Problem.maxFE
+                                break;
+                        end
+                        drawnow();
+                        Population = DistributionOptimization(Population,Div_V, R,Global);
+
+                end
+
+        end
+
+                        change = false;
+
+                else
+
+                                if rank(Population.objs) == Global.M
 					objs = Population.objs;
 					x1 = Population.decs;
 					R2 = objs\x1;
@@ -88,21 +101,38 @@ function EAGO(Global)
 				end
 
 			%con_V1 = intersect(con_V1,con_V); if Global.problem = SDTLZ;
-			for j = 1 : 1
-				for i = 1 : 35
-					drawnow();                    
-					Population = ConvergenceOptimization_1(Population,con_V1, R1,Global);
-				end
-				for i = 1 : 35
-					drawnow();
-					Population = ConvergenceOptimization_2(Population,con_V_plus, R1,Global);
-				end
-				for i = 1 : 10
-					drawnow();
-					Population = DistributionOptimization2(Population,Div_V1, R1,Global);
-				end
-			end
-		
+			                        for j = 1 : 1
+                                if Problem.FE >= Problem.maxFE
+                                        break;
+                                end
+                                for i = 1 : 35
+                                        if Problem.FE >= Problem.maxFE
+                                                break;
+                                        end
+                                        drawnow();
+                                        Population = ConvergenceOptimization_1(Population,con_V1, R1,Global);
+                                end
+                                if Problem.FE >= Problem.maxFE
+                                        break;
+                                end
+                                for i = 1 : 35
+                                        if Problem.FE >= Problem.maxFE
+                                                break;
+                                        end
+                                        drawnow();
+                                        Population = ConvergenceOptimization_2(Population,con_V_plus, R1,Global);
+                                end
+                                if Problem.FE >= Problem.maxFE
+                                        break;
+                                end
+                                for i = 1 : 10
+                                        if Problem.FE >= Problem.maxFE
+                                                break;
+                                        end
+                                        drawnow();
+                                        Population = DistributionOptimization2(Population,Div_V1, R1,Global);
+                                end
+                        end
 			change = true;
 		end
 
@@ -112,6 +142,10 @@ end
 
 function Population = ConvergenceOptimization_R(Population,con_V, R,Global)
     [N,D] = size(Population.decs);
+    Problem = Global.problem;
+    if Problem.FE >= Problem.maxFE
+            return;
+    end
 
 	OffDec = Population.decs;
    
@@ -143,8 +177,13 @@ end
 
 
 function Population2 = DistributionOptimization(Population,Div_V, R,Global)
-    
-	N            = length(Population);
+
+        N            = length(Population);
+        Problem = Global.problem;
+        if Problem.FE >= Problem.maxFE
+                Population2 = Population;
+                return;
+        end
 	OffDec       = Population(TournamentSelection(2,N,calCon(Population.objs))).decs;
 	%OffDec       =  Population.decs;
 	
@@ -186,134 +225,138 @@ end
 
 function [Div_V,con_V, con_V_plus] = VariableAnalysis2(Global,Population,nSel,nPer,R)
 
-	
-	
-	VariableKind = false(1,Global.D);
-    VariableKind_plus = false(1,Global.D);
-    for i = 1 : Global.D
-        drawnow();
-        
-		Sample = randi(Global.N,1,nSel);
-		result = zeros(1,nSel);
-		for j = 1 : nSel
-            
-			Decs      = repmat(Population(Sample(j)).decs,nPer,1);
-			Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1);
-			%newPopu_random   = INDIVIDUAL(Decs);
-			newPopu_random = Global.problem.CalObj(Decs);
-			Global.evaluated = Global.evaluated + size(newPopu_random, 1);
-			newPopu_random_average = sum(newPopu_random, 1)/nPer;
 
-			
-			NewObjs = repmat(Population(Sample(j)).objs,nPer,1) - repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
-			Offspring = NewObjs * R(:, i);
-			Decs(:,i) = min(max(Offspring,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
-			%newPopu_reflex   = INDIVIDUAL(Decs);
-			newPopu_reflex = Global.problem.CalObj(Decs);
-			Global.evaluated = Global.evaluated + size(newPopu_reflex, 1);
-			newPopu_reflex_average = sum(newPopu_reflex, 1)/nPer;
-			
-			
-			NewObjs_plus = repmat(Population(Sample(j)).objs,nPer,1) + repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
-			Offspring_plus = NewObjs_plus * R(:, i);
-			Decs(:,i) = min(max(Offspring_plus,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
-			%newPopu_reflex   = INDIVIDUAL(Decs);
-			newPopu_reflex_plus = Global.problem.CalObj(Decs);
-			Global.evaluated = Global.evaluated + size(newPopu_reflex_plus, 1);
-			newPopu_reflex_plus_average = sum(newPopu_reflex_plus, 1)/nPer;
-			
-			
-			
-			
-			
-			
-			if(sum(newPopu_reflex_average.*newPopu_reflex_average)*0.9 <= sum(newPopu_random_average.*newPopu_random_average) && sum(newPopu_reflex_average.*newPopu_reflex_average) <= sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average))
-				result(j) = 1;
-			elseif(sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average)*0.9 <= sum(newPopu_random_average.*newPopu_random_average) && sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average) < sum(newPopu_reflex_average.*newPopu_reflex_average))
-				result(j) = 2;			
-			end
+
+        VariableKind = false(1,Global.D);
+    VariableKind_plus = false(1,Global.D);
+    Problem = Global.problem;
+    for i = 1 : Global.D
+        if Problem.FE >= Problem.maxFE
+                break;
+        end
+        drawnow();
+
+                Sample = randi(Global.N,1,nSel);
+                result = zeros(1,nSel);
+                for j = 1 : nSel
+                        if Problem.FE >= Problem.maxFE
+                                break;
+                        end
+
+                        Decs      = repmat(Population(Sample(j)).decs,nPer,1);
+                        Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1);
+                        newPopu_random = Problem.Evaluation(Decs).objs;
+                        newPopu_random_average = sum(newPopu_random, 1)/nPer;
+
+
+                        NewObjs = repmat(Population(Sample(j)).objs,nPer,1) - repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
+                        Offspring = NewObjs * R(:, i);
+                        Decs(:,i) = min(max(Offspring,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
+                        newPopu_reflex = Problem.Evaluation(Decs).objs;
+                        newPopu_reflex_average = sum(newPopu_reflex, 1)/nPer;
+
+
+                        NewObjs_plus = repmat(Population(Sample(j)).objs,nPer,1) + repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
+                        Offspring_plus = NewObjs_plus * R(:, i);
+                        Decs(:,i) = min(max(Offspring_plus,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
+                        newPopu_reflex_plus = Problem.Evaluation(Decs).objs;
+                        newPopu_reflex_plus_average = sum(newPopu_reflex_plus, 1)/nPer;
+
+
+
+
+
+
+                        if(sum(newPopu_reflex_average.*newPopu_reflex_average)*0.9 <= sum(newPopu_random_average.*newPopu_random_average) && sum(newPopu_reflex_average.*newPopu_reflex_average) <= sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average))
+                                result(j) = 1;
+                        elseif(sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average)*0.9 <= sum(newPopu_random_average.*newPopu_random_average) && sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average) < sum(newPopu_reflex_average.*newPopu_reflex_average))
+                                result(j) = 2;
+                        end
 
         end
-		
-		if sum(result == 1) >= sum(result == 2) && sum(result == 1) >= sum(result == 0)
-			VariableKind(i) = true;
-		elseif (sum(result == 2) > sum(result == 1) && sum(result == 2) >= sum(result == 0))
-			VariableKind_plus(i) = true;
-		end
+
+                if sum(result == 1) >= sum(result == 2) && sum(result == 1) >= sum(result == 0)
+                        VariableKind(i) = true;
+                elseif (sum(result == 2) > sum(result == 1) && sum(result == 2) >= sum(result == 0))
+                        VariableKind_plus(i) = true;
+                end
     end
-    
+
 
     Div_V = find(~(VariableKind | VariableKind_plus));
     con_V = find(VariableKind);
-	con_V_plus =find(VariableKind_plus);
+        con_V_plus =find(VariableKind_plus);
 end
 
 function [Div_V,con_V, con_V_plus] = VariableAnalysis1(Global,Population,nSel,nPer,R)
 
 
-	
-	VariableKind = false(1,Global.D);
+
+        VariableKind = false(1,Global.D);
     VariableKind_plus = false(1,Global.D);
+    Problem = Global.problem;
     for i = 1 : Global.D
+        if Problem.FE >= Problem.maxFE
+                break;
+        end
         drawnow();
 
-		Sample = randi(Global.N,1,nSel);
-		result = zeros(1,nSel);
-		for j = 1 : nSel
-            
-			Decs      = repmat(Population(Sample(j)).decs,nPer,1);
-			Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1);
-			%newPopu_random   = INDIVIDUAL(Decs);
-			newPopu_random = Global.problem.CalObj(Decs);
-			Global.evaluated = Global.evaluated + size(newPopu_random, 1);
-			newPopu_random_average = sum(newPopu_random, 1)/nPer;
+                Sample = randi(Global.N,1,nSel);
+                result = zeros(1,nSel);
+                for j = 1 : nSel
+                        if Problem.FE >= Problem.maxFE
+                                break;
+                        end
 
-			
-			NewObjs = repmat(Population(Sample(j)).objs,nPer,1) - repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
-			Offspring = NewObjs * R(:, i);
-			Decs(:,i) = min(max(Offspring,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
-			%newPopu_reflex   = INDIVIDUAL(Decs);
-			newPopu_reflex = Global.problem.CalObj(Decs);
-			Global.evaluated = Global.evaluated + size(newPopu_reflex, 1);
-			newPopu_reflex_average = sum(newPopu_reflex, 1)/nPer;
-			
-			
-			NewObjs_plus = repmat(Population(Sample(j)).objs,nPer,1) + repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
-			Offspring_plus = NewObjs_plus * R(:, i);
-			Decs(:,i) = min(max(Offspring_plus,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
-			%newPopu_reflex   = INDIVIDUAL(Decs);
-			newPopu_reflex_plus = Global.problem.CalObj(Decs);
-			Global.evaluated = Global.evaluated + size(newPopu_reflex_plus, 1);
-			newPopu_reflex_plus_average = sum(newPopu_reflex_plus, 1)/nPer;
-			
-			
+                        Decs      = repmat(Population(Sample(j)).decs,nPer,1);
+                        Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1);
+                        newPopu_random = Problem.Evaluation(Decs).objs;
+                        newPopu_random_average = sum(newPopu_random, 1)/nPer;
 
-			if(sum(newPopu_reflex_average.*newPopu_reflex_average) <= sum(newPopu_random_average.*newPopu_random_average) && sum(newPopu_reflex_average.*newPopu_reflex_average) <= sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average))
-				result(j) = 1;
-			elseif(sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average) <= sum(newPopu_random_average.*newPopu_random_average) && sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average) < sum(newPopu_reflex_average.*newPopu_reflex_average))
-				result(j) = 2;			
-			end
+
+                        NewObjs = repmat(Population(Sample(j)).objs,nPer,1) - repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
+                        Offspring = NewObjs * R(:, i);
+                        Decs(:,i) = min(max(Offspring,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
+                        newPopu_reflex = Problem.Evaluation(Decs).objs;
+                        newPopu_reflex_average = sum(newPopu_reflex, 1)/nPer;
+
+
+                        NewObjs_plus = repmat(Population(Sample(j)).objs,nPer,1) + repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
+                        Offspring_plus = NewObjs_plus * R(:, i);
+                        Decs(:,i) = min(max(Offspring_plus,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
+                        newPopu_reflex_plus = Problem.Evaluation(Decs).objs;
+                        newPopu_reflex_plus_average = sum(newPopu_reflex_plus, 1)/nPer;
+
+
+
+                        if(sum(newPopu_reflex_average.*newPopu_reflex_average) <= sum(newPopu_random_average.*newPopu_random_average) && sum(newPopu_reflex_average.*newPopu_reflex_average) <= sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average))
+                                result(j) = 1;
+                        elseif(sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average) <= sum(newPopu_random_average.*newPopu_random_average) && sum(newPopu_reflex_plus_average.*newPopu_reflex_plus_average) < sum(newPopu_reflex_average.*newPopu_reflex_average))
+                                result(j) = 2;
+                        end
 
         end
-		
-		if sum(result == 1) >= sum(result == 2) && sum(result == 1) >= sum(result == 0)
-			VariableKind(i) = true;
-		elseif (sum(result == 2) > sum(result == 1) && sum(result == 2) >= sum(result == 0))
-			VariableKind_plus(i) = true;
-		end
+
+                if sum(result == 1) >= sum(result == 2) && sum(result == 1) >= sum(result == 0)
+                        VariableKind(i) = true;
+                elseif (sum(result == 2) > sum(result == 1) && sum(result == 2) >= sum(result == 0))
+                        VariableKind_plus(i) = true;
+                end
     end
-    
+
 
     Div_V = find(~(VariableKind | VariableKind_plus));
     con_V = find(VariableKind);
-	con_V_plus =find(VariableKind_plus);
+        con_V_plus =find(VariableKind_plus);
 end
-
-
 
 function Population = ConvergenceOptimization_1(Population,con_V, R,Global)
     [N,D] = size(Population.decs);
     Con   = calCon(Population.objs);
+    Problem = Global.problem;
+    if Problem.FE >= Problem.maxFE
+            return;
+    end
 
 
 	OffDec = Population.decs;
@@ -341,6 +384,10 @@ end
 function Population = ConvergenceOptimization_2(Population,con_V_plus, R,Global)
     [N,D] = size(Population.decs);
     Con   = calCon(Population.objs);
+    Problem = Global.problem;
+    if Problem.FE >= Problem.maxFE
+            return;
+    end
 
 
 	OffDec = Population.decs;
@@ -370,8 +417,12 @@ end
 
 function Population = DistributionOptimization2(Population,Div_V, R,Global)
 % Distribution optimization
-	N            = length(Population);
-	OffDec       = Population(TournamentSelection(2,N,calCon(Population.objs))).decs;
+        N            = length(Population);
+        OffDec       = Population(TournamentSelection(2,N,calCon(Population.objs))).decs;
+        Problem = Global.problem;
+        if Problem.FE >= Problem.maxFE
+                return;
+        end
 	NewObjs = GAhalf1(Population.objs, N);
 
 	Offspring_Convergence = NewObjs * R(:, Div_V);
