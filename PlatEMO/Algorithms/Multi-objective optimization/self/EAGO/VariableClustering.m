@@ -1,4 +1,4 @@
-function [PV,DV] = VariableClustering(Global,Population,nSel,nPer)
+function [PV,DV] = VariableClustering(Problem,Population,nSel,nPer)
 % Detect the kind of each decision variable
 
 %------------------------------- Copyright --------------------------------
@@ -26,9 +26,15 @@ function [PV,DV] = VariableClustering(Global,Population,nSel,nPer)
     for i = 1 : D
         drawnow();
         % Generate several random solutions by perturbing the i-th dimension
+        if Problem.maxFE - Problem.FE < nSel*nPer
+            break;
+        end
         Decs      = repmat(Population(Sample).decs,nPer,1);
-        Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1);
-        newPopu   = INDIVIDUAL(Decs);
+        Decs(:,i) = unifrnd(Problem.lower(i),Problem.upper(i),size(Decs,1),1);
+        newPopu   = Problem.Evaluation(Decs);
+        if length(newPopu) < nSel*nPer
+            break;
+        end
         for j = 1 : nSel
             % Normalize the objective values of the current perturbed solutions
             Points = newPopu(j:nSel:end).objs;
