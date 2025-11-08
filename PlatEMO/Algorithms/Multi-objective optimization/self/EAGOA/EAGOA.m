@@ -38,12 +38,13 @@ function EAGOA(Global)
           end
 
     
+    Problem = Global.problem;
     while Global.NotTermination(Population)
 
 
             
           
-         if Global.evaluated / Global.evaluation < 0.9
+         if Problem.FE / Problem.maxFE < 0.9
                 temp = 5;
          else
                 temp = 1;
@@ -52,16 +53,25 @@ function EAGOA(Global)
         
         
          for j = 1 : temp*2
+            if Problem.FE >= Problem.maxFE
+                break;
+            end
             for ij = 1 : length(m2)
+                if Problem.FE >= Problem.maxFE
+                    break;
+                end
                 drawnow();
 
-				Population = SingleOptimization(Population,m2(ij), R,Global);
+                                Population = SingleOptimization(Population,m2(ij), R,Global);
 
             end
          end
-            
+
         for j = 1 : temp
-            
+            if Problem.FE >= Problem.maxFE
+                break;
+            end
+
             drawnow();
             Population = GroupOptimization(Population,m1, R,Global);
 
@@ -221,9 +231,14 @@ end
 
 function Population2 = GroupOptimization(Population,Div_V, R,Global)
 
-    
-	N            = length(Population);
-	OffDec       = Population(TournamentSelection(2,N,calCon(Population.objs))).decs;
+
+        N            = length(Population);
+        Problem = Global.problem;
+        if Problem.FE >= Problem.maxFE
+                Population2 = Population;
+                return;
+        end
+        OffDec       = Population(TournamentSelection(2,N,calCon(Population.objs))).decs;
    NewObjs = GAhalf3(Population.objs, N);
 	Offspring_Convergence = ELU(NewObjs * R(:, Div_V));
 	NewObjs2 = GAhalf2_2(Population.objs, N);
@@ -246,7 +261,11 @@ end
 
 function Population = SingleOptimization(Population,con_V, R,Global)
    [N,D] = size(Population.decs);
-	OffDec = Population.decs;
+        Problem = Global.problem;
+        if Problem.FE >= Problem.maxFE
+                return;
+        end
+        OffDec = Population.decs;
 
    NewObjs = GAhalf3(Population(randperm(N)).objs, N);
 
