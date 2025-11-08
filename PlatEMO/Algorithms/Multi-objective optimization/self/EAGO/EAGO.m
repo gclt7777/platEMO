@@ -15,7 +15,7 @@ classdef EAGO < ALGORITHM
             R    = objs\x1;
             R1   = R;
 
-            [Div_V,con_V] = VariableClustering(Problem,Population,nSel,nPer);
+            [Div_V,con_V] = EAGO.VariableClustering(Problem,Population,nSel,nPer);
             [Div_V1,con_V1,con_V_plus] = EAGO.VariableAnalysis1(Problem,Population,nSel,nPer,R1);
 
             change = true;
@@ -112,6 +112,60 @@ classdef EAGO < ALGORITHM
     end
 
     methods(Static, Access = private)
+        function [Div_V,con_V] = VariableClustering(Problem,Population,nSel,nPer)
+            [N,D] = size(Population.decs);
+            ND    = NDSort(Population.objs,1) == 1;
+            fmin  = min(Population(ND).objs,[],1);
+            fmax  = max(Population(ND).objs,[],1);
+            if any(fmax==fmin)
+                fmax = ones(size(fmax));
+                fmin = zeros(size(fmin));
+            end
+
+            Angle  = zeros(D,nSel);
+            RMSE   = zeros(D,nSel);
+            Sample = randi(N,1,nSel);
+            for i = 1 : D
+                drawnow();
+                if Problem.maxFE - Problem.FE < nSel*nPer
+                    break;
+                end
+                Decs      = repmat(Population(Sample).decs,nPer,1);
+                Decs(:,i) = unifrnd(Problem.lower(i),Problem.upper(i),size(Decs,1),1);
+                newPopu   = Problem.Evaluation(Decs);
+                if length(newPopu) < nSel*nPer
+                    break;
+                end
+                for j = 1 : nSel
+                    Points = newPopu(j:nSel:end).objs;
+                    Points = (Points-repmat(fmin,size(Points,1),1))./repmat(fmax-fmin,size(Points,1),1);
+                    Points = Points - repmat(mean(Points,1),nPer,1);
+                    [~,~,V] = svd(Points);
+                    Vector  = V(:,1)'./norm(V(:,1)');
+                    error = zeros(1,nPer);
+                    for k = 1 : nPer
+                        error(k) = norm(Points(k,:)-sum(Points(k,:).*Vector)*Vector);
+                    end
+                    RMSE(i,j) = sqrt(sum(error.^2));
+                    normal     = ones(1,size(Vector,2));
+                    sine       = abs(sum(Vector.*normal,2))./norm(Vector)./norm(normal);
+                    Angle(i,j) = real(asin(sine)/pi*180);
+                end
+            end
+
+            VariableKind = (mean(RMSE,2)<1e-2)';
+            result       = kmeans(Angle,2)';
+            if any(result(VariableKind)==1) && any(result(VariableKind)==2)
+                if mean(mean(Angle(result==1&VariableKind,:))) > mean(mean(Angle(result==2&VariableKind,:)))
+                    VariableKind = VariableKind & result==1;
+                else
+                    VariableKind = VariableKind & result==2;
+                end
+            end
+            Div_V = find(~VariableKind);
+            con_V = find(VariableKind);
+        end
+
         function Population = ConvergenceOptimization_R(Problem,Population,con_V,R,c_fmin,c_fmax)
             [N,~] = size(Population.decs);
             if Problem.FE >= Problem.maxFE
