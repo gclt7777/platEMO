@@ -41,7 +41,8 @@ classdef OSAE_RCD_L < ALGORITHM
                 OffspringD = obj.d_phase_generate(Population, Problem);
 
                 % θ（角度惩罚系数）线性调度
-                theta = min(1, Problem.FE / Problem.maxFE);
+                maxFE = max(Problem.maxFE, eps);
+                theta = min(1, Problem.FE / maxFE);
 
                 % LMOCSO / RVEA-APD 风格环境选择（鲁棒版）
                 Population = obj.env_select_lmocso([Population, OffspringC, OffspringD], ...
@@ -100,7 +101,7 @@ classdef OSAE_RCD_L < ALGORITHM
 
             % 目标平移（列最小值到 0）
             mins   = min(PopObj,[],1);
-            PopObj = PopObj - repmat(mins, Nf, 1);
+            PopObj = PopObj - mins;
 
             % 约束违反度（可行优先）
             CV = sum(max(0, Pop.cons), 2);
@@ -142,27 +143,39 @@ classdef OSAE_RCD_L < ALGORITHM
 
             % 与 N 对齐的补齐策略（先可行按 ||f||2，再不可行按 CV）
             if numel(pick) ~= N
-                left = setdiff(1:Nf, pick);
-                if ~isempty(left)
-                    leftFea = left(CV(left)==0);
-                    if ~isempty(leftFea)
-                        nf = sqrt(sum(PopObj(leftFea,:).^2, 2));
-                        [~,ord] = sort(nf, 'ascend');
-                        leftFea = leftFea(ord);
-                        need = min(N - numel(pick), numel(leftFea));
-                        if need > 0
-                            pick = [pick, leftFea(1:need)]; %#ok<AGROW>
+                selected = false(1, Nf);
+                selected(pick) = true;
+
+                if numel(pick) < N
+                    remain = find(~selected);
+                    if ~isempty(remain)
+                        feasibleRemain = remain(CV(remain)==0);
+                        if ~isempty(feasibleRemain)
+                            nf = sqrt(sum(PopObj(feasibleRemain,:).^2, 2));
+                            [~,ord] = sort(nf, 'ascend');
+                            feasibleRemain = feasibleRemain(ord);
+                            need = min(N - numel(pick), numel(feasibleRemain));
+                            if need > 0
+                                addIdx = feasibleRemain(1:need);
+                                pick = [pick, addIdx]; %#ok<AGROW>
+                                selected(addIdx) = true;
+                            end
                         end
                     end
-                    if numel(pick) < N
-                        leftInf = setdiff(left, pick);
-                        leftInf = leftInf(CV(leftInf)~=0);
-                        if ~isempty(leftInf)
-                            [~,ord] = sort(CV(leftInf), 'ascend');
-                            leftInf = leftInf(ord);
-                            need = min(N - numel(pick), numel(leftInf));
+                end
+
+                if numel(pick) < N
+                    remain = find(~selected);
+                    if ~isempty(remain)
+                        infeasibleRemain = remain(CV(remain)~=0);
+                        if ~isempty(infeasibleRemain)
+                            [~,ord] = sort(CV(infeasibleRemain), 'ascend');
+                            infeasibleRemain = infeasibleRemain(ord);
+                            need = min(N - numel(pick), numel(infeasibleRemain));
                             if need > 0
-                                pick = [pick, leftInf(1:need)]; %#ok<AGROW>
+                                addIdx = infeasibleRemain(1:need);
+                                pick = [pick, addIdx]; %#ok<AGROW>
+                                selected(addIdx) = true;
                             end
                         end
                     end
@@ -205,11 +218,13 @@ if nargin < 4, Cr = 0.9; end
 
 Dec = local_get_dec(Population, Problem);
 [N, D] = size(Dec);
+lower = Problem.lower(:)';
+upper = Problem.upper(:)';
 
 % 极端小规模兜底：随机采样
 if N < 4
-    lb = repmat(Problem.lower, N, 1);
-    ub = repmat(Problem.upper, N, 1);
+    lb = repmat(lower, N, 1);
+    ub = repmat(upper, N, 1);
     RandDec = lb + rand(N,D).*(ub - lb);
     Offspring = Problem.Evaluation(RandDec);
     return;
@@ -218,10 +233,9 @@ end
 Off = zeros(N, D);
 for i = 1:N
     % 3 个互异索引且不含 i
-    r = randperm(N,3);
-    while any(r==i)
-        r = randperm(N,3);
-    end
+    perm = randperm(N);
+    perm(perm==i) = [];
+    r = perm(1:3);
     % 变异：v = x_r1 + F*(x_r2 - x_r3)
     v = Dec(r(1),:) + F*(Dec(r(2),:) - Dec(r(3),:));
 
@@ -233,7 +247,7 @@ for i = 1:N
     u(mask) = v(mask);
 
     % 边界裁剪
-    u = min(max(u, Problem.lower), Problem.upper);
+    u = min(max(u, lower), upper);
     Off(i,:) = u;
 end
 
@@ -247,19 +261,21 @@ if nargin < 3, sigma = 0.15; end
 
 Dec = local_get_dec(Population, Problem);
 [N, D] = size(Dec);
+lower = Problem.lower(:)';
+upper = Problem.upper(:)';
 
 mu   = mean(Dec, 1);                       % 重心
 mate = Dec(randi(N, N, 1), :);             % 随机配偶
 alpha = rand(N,1);                         % 线性混合系数
-base  = alpha.*mate + (1-alpha).*repmat(mu, N, 1);
+base  = alpha.*mate + (1-alpha).*mu;
 
 % 自适应尺度：按边界范围
-range = (Problem.upper - Problem.lower);
+range = (upper - lower);
 range(range==0) = 1;                       % 防除零
-noise = randn(N, D) .* (sigma .* repmat(range, N, 1));
+noise = randn(N, D) .* (sigma .* range);
 
 Off = base + noise;
-Off = min(max(Off, Problem.lower), Problem.upper);
+Off = min(max(Off, lower), upper);
 
 Offspring = Problem.Evaluation(Off);
 end
