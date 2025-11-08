@@ -1,6 +1,6 @@
 function [PV,DV] = VariableClustering_A(varargin)
-% Detect the kind of each decision variable
-
+% Detect the kind of each decision variable (variant used by EAGOA)
+%
 %------------------------------- Copyright --------------------------------
 % Copyright (c) 2018-2019 BIMK Group. You are free to use the PlatEMO for
 % research purposes. All publications which use this platform or any code
@@ -11,24 +11,12 @@ function [PV,DV] = VariableClustering_A(varargin)
 %--------------------------------------------------------------------------
 
     narginchk(4,4);
-    if isa(varargin{1},'PROBLEM')
-        Problem    = varargin{1};
-        Population = varargin{2};
-        nSel       = varargin{3};
-        nPer       = varargin{4};
-    else
-        legacyGlobal = varargin{1};
-        if isstruct(legacyGlobal) && isfield(legacyGlobal,'problem')
-            Problem = legacyGlobal.problem;
-        else
-            error('VariableClustering_A:InvalidInput', ...
-                  ['First argument must be a PROBLEM instance or a legacy ', ...
-                   'Global structure containing the problem handle.']);
-        end
-        Population = varargin{2};
-        nSel       = varargin{3};
-        nPer       = varargin{4};
-    end
+
+    Population = varargin{2};
+    nSel       = varargin{3};
+    nPer       = varargin{4};
+
+    Problem = locateProblemHandle(varargin{1});
 
     [N,D] = size(Population.decs);
     ND    = NDSort(Population.objs,1) == 1;
@@ -38,7 +26,7 @@ function [PV,DV] = VariableClustering_A(varargin)
         fmax = ones(size(fmax));
         fmin = zeros(size(fmin));
     end
-    
+
     %% Calculate the proper values of each decision variable
     Angle  = zeros(D,nSel);
     RMSE   = zeros(D,nSel);
@@ -75,7 +63,7 @@ function [PV,DV] = VariableClustering_A(varargin)
             Angle(i,j) = real(asin(sine)/pi*180);
         end
     end
-    
+
     %% Detect the kind of each decision variable
     VariableKind = (mean(RMSE,2)<1e-2)';
     result       = kmeans(Angle,2)';
@@ -88,4 +76,31 @@ function [PV,DV] = VariableClustering_A(varargin)
     end
     PV = find(~VariableKind);
     DV = find(VariableKind);
+end
+
+function Problem = locateProblemHandle(arg1)
+% Locate the PROBLEM handle irrespective of whether a Global wrapper is used
+
+    if isa(arg1,'PROBLEM')
+        Problem = arg1;
+        return;
+    end
+
+    if isobject(arg1) && isprop(arg1,'problem')
+        Problem = arg1.problem;
+        if isa(Problem,'PROBLEM')
+            return;
+        end
+    end
+
+    if isstruct(arg1) && isfield(arg1,'problem')
+        Problem = arg1.problem;
+        if isa(Problem,'PROBLEM')
+            return;
+        end
+    end
+
+    error('VariableClustering_A:InvalidInput', ...
+          ['First argument must be a PROBLEM instance or a wrapper that ', ...
+           'stores the problem handle in the field/property ''problem''.']);
 end
