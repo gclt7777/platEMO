@@ -25,7 +25,10 @@ classdef OSAEtime < ALGORITHM
             M = Problem.M;
 
             % 参考点（NSGA-III）——生成一次全程复用
-            Z = make_reference_points(Problem.N, M);
+            [Z, Z_unit] = make_reference_points(Problem.N, M);
+
+            lower = Problem.lower;
+            upper = Problem.upper;
 
             % 首代：分组 + 拟合 T + 指派
             O_groups  = group_by_objective(Population, K);
@@ -34,6 +37,7 @@ classdef OSAEtime < ALGORITHM
                 map_prev = map;
             end
             S_groups  = assign_S_groups(map, O_groups, topFrac, D);
+            map_cache = build_map_cache(map, O_groups, S_groups);
 
             %% 主循环
             while obj.NotTerminated(Population)
@@ -68,27 +72,30 @@ classdef OSAEtime < ALGORITHM
                 % —— 若分组或 T 变了，则重算唯一指派 S_groups ——
                 if doReGroup || doFitT || isempty(S_groups)
                     S_groups = assign_S_groups(map, O_groups, topFrac, D);
+                    map_cache = build_map_cache(map, O_groups, S_groups);
                 end
 
                 % —— 分组：PCA→DE 生成，并用子块 T(Ok,Sk) 写回各自列 ——
                 for k = 1:numel(O_groups)
-                    Ok = O_groups{k};  Sk = S_groups{k};
-                    if isempty(Ok) || isempty(Sk)
+                    cache_k = map_cache{k};
+                    if isempty(cache_k)
                         continue;
                     end
 
+                    Ok = cache_k.Ok;
+
                     Yk      = Y(:, Ok);
                     Yk_new  = ae_pca_generate(Yk, kcap, kfrac, F, Cr);      % N×|Ok|
-                    Xhat_Sk = apply_map_sub(map, Yk_new, Ok, Sk);           % 反标准化写回
+                    Xhat_Sk = apply_map_cached(cache_k, Yk_new);            % 反标准化写回
 
                     % 半步融合
-                    OffDec(:, Sk) = (1-eta)*OffDec(:, Sk) + eta*Xhat_Sk;
+                    OffDec(:, cache_k.Sk) = (1-eta)*OffDec(:, cache_k.Sk) + eta*Xhat_Sk;
                 end
 
                 % 边界裁剪 + 评估 + 环境选择（NSGA-III）
-                OffDec    = min(max(OffDec, Problem.lower), Problem.upper);
+                OffDec    = min(max(OffDec, lower), upper);
                 Offspring = Problem.Evaluation(OffDec);
-                Population = env_select_nsga3([Population, Offspring], Problem.N, Z);
+                Population = env_select_nsga3([Population, Offspring], Problem.N, Z, Z_unit);
 
                 gen = gen + 1;
             end
@@ -125,7 +132,7 @@ for k = 1:Keff
         continue;
     end
     Tk = map.T(Ok, :);                    % |Ok|×D
-    energy(k, :) = sqrt(sum(Tk.^2, 1));   % 子块能量
+    energy(k, :) = sum(Tk.^2, 1);          % 子块能量（无需开方）
 end
 [~, owner] = max(energy, [], 1);          % 每列归属组
 
@@ -141,6 +148,27 @@ for k = 1:Keff
     [~, ord] = sort(e, 'descend');
     topK = max(1, min(cnt, round(topFracEff*cnt)));
     S_groups{k} = reshape(idx(ord(1:topK)), [], 1); % 强制列向量
+end
+end
+
+function cache = build_map_cache(map, O_groups, S_groups)
+Keff = numel(O_groups);
+cache = cell(1, Keff);
+for k = 1:Keff
+    Ok = O_groups{k};
+    Sk = S_groups{k};
+    if isempty(Ok) || isempty(Sk)
+        cache{k} = [];
+        continue;
+    end
+    entry.Ok   = Ok;
+    entry.Sk   = Sk;
+    entry.T    = map.T(Ok, Sk);
+    entry.muY  = map.muY(Ok);
+    entry.sigY = map.sigY(Ok);
+    entry.muX  = map.muX(Sk);
+    entry.sigX = map.sigX(Sk);
+    cache{k}   = entry;
 end
 end
 
@@ -193,15 +221,18 @@ function W = pca_basis(X, k)
 [~,~,V] = svd(X,'econ'); W = V(:,1:k);
 end
 
-function Xhat_Sk = apply_map_sub(map, Yk_new, Ok, Sk)
-Yz  = bsxfun(@rdivide, bsxfun(@minus, Yk_new, map.muY(Ok)), map.sigY(Ok));
-Xz  = Yz * map.T(Ok, Sk);
-Xhat_Sk = bsxfun(@plus, bsxfun(@times, Xz, map.sigX(Sk)), map.muX(Sk));
+function Xhat_Sk = apply_map_cached(cache_entry, Yk_new)
+Yz = bsxfun(@rdivide, bsxfun(@minus, Yk_new, cache_entry.muY), cache_entry.sigY);
+Xz = Yz * cache_entry.T;
+Xhat_Sk = bsxfun(@plus, bsxfun(@times, Xz, cache_entry.sigX), cache_entry.muX);
 end
 
 %% ============ 环境选择：NSGA-III ============
 
-function Population = env_select_nsga3(PopBoth, N, Z)
+function Population = env_select_nsga3(PopBoth, N, Z, Z_unit)
+if nargin < 4 || isempty(Z_unit)
+    Z_unit = normalize_rows(Z);
+end
 PopObj = PopBoth.objs;
 
 % 非支配排序
@@ -228,10 +259,10 @@ K = min(K, numel(Last));
 LastNorm = PopNorm(Last, :);
 
 % 参考点归属
-AssocAll = associate_to_refs(PopNorm, Z);                % 所有个体的归属（列）
+AssocAll = associate_to_refs(PopNorm, Z, Z_unit);        % 所有个体的归属（列）
 rho      = accumarray(AssocAll(PopKeep), 1, [size(Z,1), 1]);
 
-[AssocLast, PerpLast] = associate_to_refs(LastNorm, Z); % 最后一层的归属与垂距（列）
+[AssocLast, PerpLast] = associate_to_refs(LastNorm, Z, Z_unit); % 最后一层的归属与垂距（列）
 
 Chosen = false(numel(Last), 1);                          % 逻辑列向量
 picked = 0;
@@ -321,22 +352,33 @@ PopNorm = bsxfun(@rdivide, PopShift, intercepts);
 PopNorm(~isfinite(PopNorm)) = 0;
 end
 
-function [assoc, perp] = associate_to_refs(F, Z)
+function [assoc, perp] = associate_to_refs(F, Z, Z_unit)
 % 余弦 + 垂距
-% 先把参考点单位化
-Zn = Z ./ max(sqrt(sum(Z.^2,2)), eps);
-Fn = F; nrm = sqrt(sum(Fn.^2,2)); nrm(nrm==0)=1; Fn = Fn ./ nrm;
+if nargin < 3 || isempty(Z_unit)
+    Z_unit = normalize_rows(Z);
+end
+Fn = normalize_rows(F);
 
-cosine = Fn * Zn.';                             % N×K
+cosine = Fn * Z_unit.';                         % N×K
 cosine = max(min(cosine,1),-1);
 [~, assoc] = max(cosine, [], 2);
 % 垂直距离 = ||f|| * sqrt(1 - cos^2)
-perp = sqrt(max(0, 1 - cosine.^2));             % 使用单位范数后的等价形式
 row = (1:size(F,1))';
-perp = perp(sub2ind(size(perp), row, assoc));
+cos_pick = cosine(sub2ind(size(cosine), row, assoc));
+perp = sqrt(max(0, 1 - cos_pick.^2));           % 使用单位范数后的等价形式
 end
 
-function Z = make_reference_points(N, M)
+function Xn = normalize_rows(X)
+if isempty(X)
+    Xn = X;
+    return;
+end
+nrm = sqrt(sum(X.^2, 2));
+nrm(nrm == 0) = 1;
+Xn = bsxfun(@rdivide, X, nrm);
+end
+
+function [Z, Z_unit] = make_reference_points(N, M)
 % 优先调用 PlatEMO 的 UniformPoint；不可用则内置
 try
     [Z, ~] = UniformPoint(N, M);
@@ -353,6 +395,7 @@ catch
 end
 % 单位化（防数值问题）
 Z = Z ./ max(sum(Z,2), eps);
+Z_unit = normalize_rows(Z);
 end
 
 function Z = uniform_points_builtin(N, M)
