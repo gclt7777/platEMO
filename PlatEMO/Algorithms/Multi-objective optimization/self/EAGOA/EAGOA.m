@@ -240,22 +240,26 @@ function Population2 = GroupOptimization(Population,Div_V, R,Global)
         end
         OffDec       = Population(TournamentSelection(2,N,calCon(Population.objs))).decs;
    NewObjs = GAhalf3(Population.objs, N);
-	Offspring_Convergence = ELU(NewObjs * R(:, Div_V));
-	NewObjs2 = GAhalf2_2(Population.objs, N);
-	Offspring_Convergence2 = ELU(NewObjs2 * R(:, Div_V));
-	temp = sqrt(OffDec(randperm(N),Div_V).*OffDec(randperm(N),Div_V));
-	temp2 = OffDec(:,Div_V);
-	a = randperm(N);
-	temp(temp>OffDec(a,Div_V)) = temp2(temp>OffDec(a,Div_V));
-	%OffDec(:,Div_V) = (temp) + ELU(Offspring_Convergence-Offspring_Convergence2);
-	OffDec(:,Div_V) = (temp) + (Offspring_Convergence-Offspring_Convergence2);
+        Offspring_Convergence = ELU(NewObjs * R(:, Div_V));
+        NewObjs2 = GAhalf2_2(Population.objs, N);
+        Offspring_Convergence2 = ELU(NewObjs2 * R(:, Div_V));
+        temp = sqrt(OffDec(randperm(N),Div_V).*OffDec(randperm(N),Div_V));
+        temp2 = OffDec(:,Div_V);
+        a = randperm(N);
+        temp(temp>OffDec(a,Div_V)) = temp2(temp>OffDec(a,Div_V));
+        %OffDec(:,Div_V) = (temp) + ELU(Offspring_Convergence-Offspring_Convergence2);
+        OffDec(:,Div_V) = (temp) + (Offspring_Convergence-Offspring_Convergence2);
    OffDec(:,Div_V) = min(max(OffDec(:,Div_V),repmat(Global.lower(Div_V),N,1)),repmat(Global.upper(Div_V),N,1));
-   Offspring    = INDIVIDUAL(OffDec);
-	Population2   = EnvironmentalSelection_A([Population,Offspring],N);
-    
-    
+   [Offspring,~]    = EvaluateWithBudget(Global,OffDec);
+        if isempty(Offspring)
+                Population2 = Population;
+                return;
+        end
+        Population2   = EnvironmentalSelection_A([Population,Offspring],N);
 
-	
+
+
+
 end
 
 
@@ -280,24 +284,68 @@ function Population = SingleOptimization(Population,con_V, R,Global)
 	OffDec(:,con_V) = min(max(OffDec(:,con_V),repmat(Global.lower(con_V),N,1)),repmat(Global.upper(con_V),N,1));
 	
 
-	Offspring          = INDIVIDUAL(OffDec);
+        remain = Problem.maxFE - Problem.FE;
+        if remain <= 0
+                return;
+        elseif remain < N
+                evalIdx = randperm(N,remain);
+        else
+                evalIdx = 1:N;
+        end
+        [Offspring,evalIdx] = EvaluateWithBudget(Global,OffDec,evalIdx);
+        if isempty(evalIdx)
+                return;
+        end
 
-    
 % 	allCon  = calCon([Population.objs;Offspring.objs]);
 % 	Con     = allCon(1:N);
 % 	newCon  = allCon(N+1:end);
 % 	updated = Con > newCon;
     
     
-    updated = sum(Offspring.objs <= Population.objs,2) >= Global.M;
+    updated = sum(Offspring.objs <= Population(evalIdx).objs,2) >= Global.M;
 %    %updated     = sum(Offspring.objs ,2) <= sum(Population.objs,2);
 %    
 
     
 
 
-	Population(updated) = Offspring(updated);
+        Population(evalIdx(updated)) = Offspring(updated);
 
 
+end
+
+function [Offspring,idx] = EvaluateWithBudget(Global,Decs,idx)
+    Problem = Global.problem;
+    remain  = Problem.maxFE - Problem.FE;
+    if remain <= 0
+        Offspring = [];
+        idx       = [];
+        return;
+    end
+    total = size(Decs,1);
+    if nargin < 3
+        if remain < total
+            idx = randperm(total,remain);
+        else
+            idx = 1:total;
+        end
+    else
+        idx = idx(:)';
+        if isempty(idx)
+            Offspring = [];
+            idx       = [];
+            return;
+        end
+        if remain < length(idx)
+            idx = idx(1:remain);
+        end
+    end
+    if isempty(idx)
+        Offspring = [];
+        return;
+    end
+    idx       = idx(:);
+    Offspring = Problem.Evaluation(Decs(idx,:));
 end
 

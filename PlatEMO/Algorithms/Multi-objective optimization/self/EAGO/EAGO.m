@@ -141,37 +141,43 @@ function EAGO(Global)
 end
 
 function Population = ConvergenceOptimization_R(Population,con_V, R,Global)
-    [N,D] = size(Population.decs);
+    [N,~] = size(Population.decs);
     Problem = Global.problem;
     if Problem.FE >= Problem.maxFE
             return;
     end
 
-	OffDec = Population.decs;
-   
-	NewObjs = GAhalf3(Population(randperm(N)).objs, N);
+        OffDec = Population.decs;
 
-	Offspring_Convergence = NewObjs * R(:, con_V);
-	
-	NewObjs2 = GAhalf2(Population(randperm(N)).objs, N);
+        NewObjs = GAhalf3(Population(randperm(N)).objs, N);
 
-	Offspring_Convergence2 = NewObjs2 * R(:, con_V);
-   
-	OffDec(:,con_V) = OffDec(randperm(N),con_V) + (Offspring_Convergence - Offspring_Convergence2)*0.5;
-	OffDec(:,con_V) = min(max(OffDec(:,con_V),repmat(Global.lower(con_V),N,1)),repmat(Global.upper(con_V),N,1));
-		
-	Offspring          = INDIVIDUAL(OffDec);
-	
+        Offspring_Convergence = NewObjs * R(:, con_V);
 
-	
-	
+        NewObjs2 = GAhalf2(Population(randperm(N)).objs, N);
 
-	allCon  = calCon([Population.objs;Offspring.objs]);
-	Con     = allCon(1:N);
-	newCon  = allCon(N+1:end);
-	updated = Con > newCon;
-	Population(updated) = Offspring(updated);
-	Con(updated)        = newCon(updated);
+        Offspring_Convergence2 = NewObjs2 * R(:, con_V);
+
+        OffDec(:,con_V) = OffDec(randperm(N),con_V) + (Offspring_Convergence - Offspring_Convergence2)*0.5;
+        OffDec(:,con_V) = min(max(OffDec(:,con_V),repmat(Global.lower(con_V),N,1)),repmat(Global.upper(con_V),N,1));
+
+        remain = Problem.maxFE - Problem.FE;
+        if remain <= 0
+            return;
+        elseif remain < N
+            evalIdx = randperm(N,remain);
+        else
+            evalIdx = 1:N;
+        end
+        [Offspring,evalIdx] = EvaluateWithBudget(Global,OffDec,evalIdx);
+        if isempty(evalIdx)
+            return;
+        end
+
+        allCon  = calCon([Population.objs;Offspring.objs]);
+        Con     = allCon(1:N);
+        newCon  = allCon(N+1:end);
+        updated = Con(evalIdx) > newCon;
+        Population(evalIdx(updated)) = Offspring(updated);
 
 end
 
@@ -184,39 +190,43 @@ function Population2 = DistributionOptimization(Population,Div_V, R,Global)
                 Population2 = Population;
                 return;
         end
-	OffDec       = Population(TournamentSelection(2,N,calCon(Population.objs))).decs;
-	%OffDec       =  Population.decs;
-	
+        OffDec       = Population(TournamentSelection(2,N,calCon(Population.objs))).decs;
+        %OffDec       =  Population.decs;
+
 
     NewObjs = GAhalf3(Population.objs, N);
 
-	Offspring_Convergence = NewObjs * R(:, Div_V);
-	
-	NewObjs2 = GAhalf2(Population.objs, N);
+        Offspring_Convergence = NewObjs * R(:, Div_V);
 
-	Offspring_Convergence2 = NewObjs2 * R(:, Div_V);
-    
-    
+        NewObjs2 = GAhalf2(Population.objs, N);
+
+        Offspring_Convergence2 = NewObjs2 * R(:, Div_V);
+
+
    %NewDec = OffDec(:,Div_V);
    %Offspring_Convergence(Offspring_Convergence < repmat(Global.lower(Div_V), N, 1)) = NewDec(Offspring_Convergence < repmat(Global.lower(Div_V), N, 1));
    %Offspring_Convergence(Offspring_Convergence > repmat(Global.upper(Div_V), N, 1)) = NewDec(Offspring_Convergence > repmat(Global.upper(Div_V), N, 1));
-   
+
 
    %OffDec(:,Div_V) = sqrt(OffDec(:,Div_V).*unifrnd(repmat(Global.lower(Div_V),size(OffDec,1),1),repmat(Global.upper(Div_V),size(OffDec,1),1)));
-	temp = sqrt(OffDec(randperm(N),Div_V).*OffDec(randperm(N),Div_V));
-	temp2 = OffDec(:,Div_V);
-	a = randperm(N);
-	temp(temp>OffDec(a,Div_V)) = temp2(temp>OffDec(a,Div_V));
-	OffDec(:,Div_V) = (temp) + (Offspring_Convergence-Offspring_Convergence2)*(1/2);
+        temp = sqrt(OffDec(randperm(N),Div_V).*OffDec(randperm(N),Div_V));
+        temp2 = OffDec(:,Div_V);
+        a = randperm(N);
+        temp(temp>OffDec(a,Div_V)) = temp2(temp>OffDec(a,Div_V));
+        OffDec(:,Div_V) = (temp) + (Offspring_Convergence-Offspring_Convergence2)*(1/2);
     OffDec(:,Div_V) = min(max(OffDec(:,Div_V),repmat(Global.lower(Div_V),N,1)),repmat(Global.upper(Div_V),N,1));
 
 
-	
-	%OffDec(:,Div_V) = OffDec(randperm(N),Div_V) + Offspring_Convergence;
+
+        %OffDec(:,Div_V) = OffDec(randperm(N),Div_V) + Offspring_Convergence;
     %OffDec(:,Div_V) = min(max(OffDec(:,Div_V),repmat(Global.lower(Div_V),N,1)),repmat(Global.upper(Div_V),N,1));
 
 
-    Offspring    = INDIVIDUAL(OffDec);
+    [Offspring,~] = EvaluateWithBudget(Global,OffDec);
+    if isempty(Offspring)
+            Population2 = Population;
+            return;
+    end
     Population2   = EnvironmentalSelection([Population,Offspring],N);
 
 end
@@ -235,11 +245,14 @@ function [Div_V,con_V, con_V_plus] = VariableAnalysis2(Global,Population,nSel,nP
                 break;
         end
         drawnow();
+        if Problem.maxFE - Problem.FE < 3*nPer
+                break;
+        end
 
                 Sample = randi(Global.N,1,nSel);
                 result = zeros(1,nSel);
                 for j = 1 : nSel
-                        if Problem.FE >= Problem.maxFE
+                        if Problem.FE >= Problem.maxFE || Problem.maxFE - Problem.FE < 3*nPer
                                 break;
                         end
 
@@ -259,6 +272,9 @@ function [Div_V,con_V, con_V_plus] = VariableAnalysis2(Global,Population,nSel,nP
                         NewObjs_plus = repmat(Population(Sample(j)).objs,nPer,1) + repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
                         Offspring_plus = NewObjs_plus * R(:, i);
                         Decs(:,i) = min(max(Offspring_plus,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
+                        if Problem.maxFE - Problem.FE < nPer
+                                break;
+                        end
                         newPopu_reflex_plus = Problem.Evaluation(Decs).objs;
                         newPopu_reflex_plus_average = sum(newPopu_reflex_plus, 1)/nPer;
 
@@ -300,11 +316,14 @@ function [Div_V,con_V, con_V_plus] = VariableAnalysis1(Global,Population,nSel,nP
                 break;
         end
         drawnow();
+        if Problem.maxFE - Problem.FE < 3*nPer
+                break;
+        end
 
                 Sample = randi(Global.N,1,nSel);
                 result = zeros(1,nSel);
                 for j = 1 : nSel
-                        if Problem.FE >= Problem.maxFE
+                        if Problem.FE >= Problem.maxFE || Problem.maxFE - Problem.FE < 3*nPer
                                 break;
                         end
 
@@ -324,6 +343,9 @@ function [Div_V,con_V, con_V_plus] = VariableAnalysis1(Global,Population,nSel,nP
                         NewObjs_plus = repmat(Population(Sample(j)).objs,nPer,1) + repmat(Population(Sample(j)).objs,nPer,1).*(rand(nPer, Global.M))*0.25;
                         Offspring_plus = NewObjs_plus * R(:, i);
                         Decs(:,i) = min(max(Offspring_plus,repmat(Global.lower(i),nPer,1)),repmat(Global.upper(i),nPer,1));
+                        if Problem.maxFE - Problem.FE < nPer
+                                break;
+                        end
                         newPopu_reflex_plus = Problem.Evaluation(Decs).objs;
                         newPopu_reflex_plus_average = sum(newPopu_reflex_plus, 1)/nPer;
 
@@ -351,67 +373,82 @@ function [Div_V,con_V, con_V_plus] = VariableAnalysis1(Global,Population,nSel,nP
 end
 
 function Population = ConvergenceOptimization_1(Population,con_V, R,Global)
-    [N,D] = size(Population.decs);
-    Con   = calCon(Population.objs);
+    [N,~] = size(Population.decs);
     Problem = Global.problem;
     if Problem.FE >= Problem.maxFE
             return;
     end
 
 
-	OffDec = Population.decs;
+        OffDec = Population.decs;
 
-	
-	NewObjs = GAhalf2(Population.objs, N);
-	Offspring_Convergence = NewObjs * R(:, con_V);					
-	NewDec = min(max(Offspring_Convergence,repmat(Global.lower(con_V),N,1)),repmat(Global.upper(con_V),N,1));
-						
-	OffDec(:,con_V) = (NewDec + OffDec(:,con_V))/2;
 
-	Offspring          = INDIVIDUAL(OffDec);
-	
-	
-	% Update each solution
-	allCon  = calCon([Population.objs;Offspring.objs]);
-	Con     = allCon(1:N);
-	newCon  = allCon(N+1:end);
-	updated = Con > newCon;
-	Population(updated) = Offspring(updated);
-	Con(updated)        = newCon(updated);
+        NewObjs = GAhalf2(Population.objs, N);
+        Offspring_Convergence = NewObjs * R(:, con_V);
+        NewDec = min(max(Offspring_Convergence,repmat(Global.lower(con_V),N,1)),repmat(Global.upper(con_V),N,1));
+
+        OffDec(:,con_V) = (NewDec + OffDec(:,con_V))/2;
+
+        remain = Problem.maxFE - Problem.FE;
+        if remain <= 0
+            return;
+        elseif remain < N
+            evalIdx = randperm(N,remain);
+        else
+            evalIdx = 1:N;
+        end
+        [Offspring,evalIdx] = EvaluateWithBudget(Global,OffDec,evalIdx);
+        if isempty(evalIdx)
+            return;
+        end
+
+        % Update each solution
+        allCon  = calCon([Population.objs;Offspring.objs]);
+        Con     = allCon(1:N);
+        newCon  = allCon(N+1:end);
+        updated = Con(evalIdx) > newCon;
+        Population(evalIdx(updated)) = Offspring(updated);
 
 end
 
 function Population = ConvergenceOptimization_2(Population,con_V_plus, R,Global)
-    [N,D] = size(Population.decs);
-    Con   = calCon(Population.objs);
+    [N,~] = size(Population.decs);
     Problem = Global.problem;
     if Problem.FE >= Problem.maxFE
             return;
     end
 
 
-	OffDec = Population.decs;
-				
-	NewObjs = GAhalf1(Population.objs, N);
-	Offspring_Convergence = NewObjs * R(:, con_V_plus);					
-	NewDec = min(max(Offspring_Convergence,repmat(Global.lower(con_V_plus),N,1)),repmat(Global.upper(con_V_plus),N,1));
-					
-	
-	OffDec(:,con_V_plus) = (NewDec + OffDec(:,con_V_plus))/2;
-	
-		
-	
-	Offspring          = INDIVIDUAL(OffDec);
-	
+        OffDec = Population.decs;
 
-	
-	% Update each solution
-	allCon  = calCon([Population.objs;Offspring.objs]);
-	Con     = allCon(1:N);
-	newCon  = allCon(N+1:end);
-	updated = Con > newCon;
-	Population(updated) = Offspring(updated);
-	Con(updated)        = newCon(updated);
+        NewObjs = GAhalf1(Population.objs, N);
+        Offspring_Convergence = NewObjs * R(:, con_V_plus);
+        NewDec = min(max(Offspring_Convergence,repmat(Global.lower(con_V_plus),N,1)),repmat(Global.upper(con_V_plus),N,1));
+
+
+        OffDec(:,con_V_plus) = (NewDec + OffDec(:,con_V_plus))/2;
+
+
+
+        remain = Problem.maxFE - Problem.FE;
+        if remain <= 0
+            return;
+        elseif remain < N
+            evalIdx = randperm(N,remain);
+        else
+            evalIdx = 1:N;
+        end
+        [Offspring,evalIdx] = EvaluateWithBudget(Global,OffDec,evalIdx);
+        if isempty(evalIdx)
+            return;
+        end
+
+        % Update each solution
+        allCon  = calCon([Population.objs;Offspring.objs]);
+        Con     = allCon(1:N);
+        newCon  = allCon(N+1:end);
+        updated = Con(evalIdx) > newCon;
+        Population(evalIdx(updated)) = Offspring(updated);
 
 end
 
@@ -440,8 +477,11 @@ function Population = DistributionOptimization2(Population,Div_V, R,Global)
     OffDec(:,Div_V) = min(max(OffDec(:,Div_V),repmat(Global.lower(Div_V),N,1)),repmat(Global.upper(Div_V),N,1));
 
 
-	Offspring    = INDIVIDUAL(OffDec);
-	Population   = EnvironmentalSelection([Population,Offspring],N);
+        [Offspring,~] = EvaluateWithBudget(Global,OffDec);
+        if isempty(Offspring)
+                return;
+        end
+        Population   = EnvironmentalSelection([Population,Offspring],N);
 	
 end
 
@@ -521,6 +561,40 @@ function Con = calCon(PopuObj)
     FrontNo = NDSort(PopuObj,inf);
     Con     = sum(PopuObj,2);
     Con     = FrontNo'*(max(Con)-min(Con)) + Con;
+end
+
+function [Offspring,idx] = EvaluateWithBudget(Global,Decs,idx)
+    Problem = Global.problem;
+    remain  = Problem.maxFE - Problem.FE;
+    if remain <= 0
+        Offspring = [];
+        idx       = [];
+        return;
+    end
+    total = size(Decs,1);
+    if nargin < 3
+        if remain < total
+            idx = randperm(total,remain);
+        else
+            idx = 1:total;
+        end
+    else
+        idx = idx(:)';
+        if isempty(idx)
+            Offspring = [];
+            idx       = [];
+            return;
+        end
+        if remain < length(idx)
+            idx = idx(1:remain);
+        end
+    end
+    if isempty(idx)
+        Offspring = [];
+        return;
+    end
+    idx       = idx(:);
+    Offspring = Problem.Evaluation(Decs(idx,:));
 end
 
 
