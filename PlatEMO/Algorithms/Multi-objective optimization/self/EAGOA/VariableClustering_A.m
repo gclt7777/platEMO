@@ -1,4 +1,4 @@
-function [PV,DV] = VariableClustering_A(Global,Population,nSel,nPer)
+function [PV,DV] = VariableClustering_A(varargin)
 % Detect the kind of each decision variable
 
 %------------------------------- Copyright --------------------------------
@@ -9,6 +9,26 @@ function [PV,DV] = VariableClustering_A(Global,Population,nSel,nPer)
 % for evolutionary multi-objective optimization [educational forum], IEEE
 % Computational Intelligence Magazine, 2017, 12(4): 73-87".
 %--------------------------------------------------------------------------
+
+    narginchk(4,4);
+    if isa(varargin{1},'PROBLEM')
+        Problem    = varargin{1};
+        Population = varargin{2};
+        nSel       = varargin{3};
+        nPer       = varargin{4};
+    else
+        legacyGlobal = varargin{1};
+        if isstruct(legacyGlobal) && isfield(legacyGlobal,'problem')
+            Problem = legacyGlobal.problem;
+        else
+            error('VariableClustering_A:InvalidInput', ...
+                  ['First argument must be a PROBLEM instance or a legacy ', ...
+                   'Global structure containing the problem handle.']);
+        end
+        Population = varargin{2};
+        nSel       = varargin{3};
+        nPer       = varargin{4};
+    end
 
     [N,D] = size(Population.decs);
     ND    = NDSort(Population.objs,1) == 1;
@@ -26,9 +46,15 @@ function [PV,DV] = VariableClustering_A(Global,Population,nSel,nPer)
     for i = 1 : D
         drawnow();
         % Generate several random solutions by perturbing the i-th dimension
+        if Problem.maxFE - Problem.FE < nSel*nPer
+            break;
+        end
         Decs      = repmat(Population(Sample).decs,nPer,1);
-        Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1);
-        newPopu   = INDIVIDUAL(Decs);
+        Decs(:,i) = unifrnd(Problem.lower(i),Problem.upper(i),size(Decs,1),1);
+        newPopu   = Problem.Evaluation(Decs);
+        if length(newPopu) < nSel*nPer
+            break;
+        end
         for j = 1 : nSel
             % Normalize the objective values of the current perturbed solutions
             Points = newPopu(j:nSel:end).objs;
