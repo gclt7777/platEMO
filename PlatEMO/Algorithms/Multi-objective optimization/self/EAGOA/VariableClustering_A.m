@@ -11,6 +11,7 @@ function [PV,DV] = VariableClustering_A(Problem,Population,nSel,nPer)
 %--------------------------------------------------------------------------
 
     [N,D] = size(Population.decs);
+    Problem = Global.problem;
     ND    = NDSort(Population.objs,1) == 1;
     fmin  = min(Population(ND).objs,[],1);
     fmax  = max(Population(ND).objs,[],1);
