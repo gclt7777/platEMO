@@ -84,18 +84,18 @@ classdef OSAE_RCD < ALGORITHM
                 if mod(gen-1, anchorPeriod) == 0
                     anchors = compute_anchors(Population.objs, kAnchors);
                 end
-                nInject = max(1, round(gammaMax * N));
+                nInject = max(1, floor(gammaMax * N));
                 idxInject = select_diverse_rows(Y, nInject); % 贪心最小角/最远点近似
 
                 % —— ACP：向锚点凸组合 ——
-                OffDecD_rows = zeros(nInject, D);
+                OffDecD_rows = OffDec(idxInject, :);
                 for t = 1:nInject
                     i = idxInject(t);
                     y = Y(i, :);
                     a = pick_farthest_anchor(y, anchors);
                     y_mix = (1 - alphaMix)*y + alphaMix*a;
                     % 分组写回
-                    x_row = OffDec(i, :);
+                    x_row = OffDecD_rows(t, :);
                     for k = 1:numel(O_groups)
                         Ok = O_groups{k}; Sk = S_groups{k};
                         if isempty(Ok) || isempty(Sk), continue; end
@@ -156,7 +156,7 @@ for k = 1:Keff
     idx = find(owner == k); cnt = numel(idx);
     if cnt == 0, S_groups{k} = zeros(0,1); continue; end
     e = energy(k, idx); e(~isfinite(e)) = -inf;
-    [~, ord] = sort(e, 'descend'); topK = max(1, min(cnt, round(min(max(topFrac,0),1)*cnt)));
+    [~, ord] = sort(e, 'descend'); topK = max(1, min(cnt, floor(min(max(topFrac,0),1)*cnt)));
     S_groups{k} = reshape(idx(ord(1:topK)), [], 1);
 end
 end
@@ -223,25 +223,43 @@ end
 
 %% ===================== 行相位：锚点与注入 =====================
 function anchors = compute_anchors(Y, kAnchors)
-% 在归一化目标空间做贪心远点采样（近似 DPP），返回锚点目标向量集合（行）
-Yh = normalize_obj(Y);
+% 在归一化目标空间做贪心远点采样（近似 DPP），返回锚点集合及归一化统计
+[Yh, fmin, fmax] = normalize_obj(Y);
+numPts = size(Y,1);
+if numPts == 0
+    anchors.values = zeros(0, size(Y,2));
+    anchors.normalized = anchors.values;
+    anchors.fmin = fmin;
+    anchors.fmax = fmax;
+    return;
+end
+kEff = min(max(1, floor(kAnchors)), numPts);
 % 先选与均值最远的点，再做最远点采样
-mu = mean(Yh,1); [~, i0] = max(sum((Yh - mu).^2, 2));
-sel = i0; if kAnchors<=1, anchors = Y(sel,:); return; end
-for t = 2:kAnchors
-    dmin = inf(size(Yh,1),1);
+mu = mean(Yh,1);
+[~, i0] = max(sum((Yh - mu).^2, 2));
+sel = i0;
+while numel(sel) < kEff
+    dmin = inf(numPts,1);
     for j = 1:numel(sel)
-        dmin = min(dmin, 1 - sum(Yh.*Yh(sel(j),:), 2)); % 角距离 ~ 1-cos
+        dmin = min(dmin, 1 - (Yh*Yh(sel(j), :)')); % 角距离 ~ 1-cos
     end
     dmin(sel) = -inf;
-    [~, ix] = max(dmin); sel(end+1) = ix; %#ok<AGROW>
+    [~, ix] = max(dmin);
+    if ismember(ix, sel)
+        break;
+    end
+    sel(end+1) = ix; %#ok<AGROW>
 end
-anchors = Y(sel, :);
+sel = unique(sel, 'stable');
+anchors.values = Y(sel, :);
+anchors.normalized = Yh(sel, :);
+anchors.fmin = fmin;
+anchors.fmax = fmax;
 end
 
 function idx = select_diverse_rows(Y, n)
 % 贪心 max-min 选择 n 个多样行（用角距离近似）
-Yh = normalize_obj(Y); N = size(Yh,1);
+[Yh, ~, ~] = normalize_obj(Y); N = size(Yh,1);
 if n >= N, idx = 1:N; return; end
 mu = mean(Yh,1); [~, i0] = max(sum((Yh - mu).^2, 2));
 sel = i0; cand = true(N,1); cand(i0)=false;
@@ -258,13 +276,31 @@ idx = sel;
 end
 
 function a = pick_farthest_anchor(y, anchors)
-Yh = normalize_obj(y); Ah = normalize_obj(anchors);
-cosv = Ah * Yh'; [~, ix] = min(cosv); a = anchors(ix, :);
+if isempty(anchors.values)
+    a = y;
+    return;
+end
+yhat = normalize_obj(y, anchors.fmin, anchors.fmax);
+cosv = anchors.normalized * yhat';
+[~, ix] = min(cosv);
+a = anchors.values(ix, :);
 end
 
-function Yh = normalize_obj(Y)
-fmax = max(Y, [], 1); fmin = min(Y, [], 1);
+function [Yh, fmin, fmax] = normalize_obj(Y, fmin, fmax)
+if isempty(Y)
+    Yh = zeros(size(Y));
+    if nargin < 2 || isempty(fmin) || isempty(fmax)
+        fmin = zeros(1, size(Y,2));
+        fmax = fmin;
+    end
+    return;
+end
+if nargin < 2 || isempty(fmin) || isempty(fmax)
+    fmax = max(Y, [], 1);
+    fmin = min(Y, [], 1);
+end
 span = fmax - fmin; span(span==0) = 1; Yn = (Y - fmin) ./ span;
+Yn(~isfinite(Yn)) = 0;
 nrm = sqrt(sum(Yn.^2, 2)); nrm(nrm==0) = 1; Yh = Yn ./ nrm;
 end
 
