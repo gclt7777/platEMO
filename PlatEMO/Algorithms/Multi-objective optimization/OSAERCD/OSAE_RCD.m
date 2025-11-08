@@ -143,7 +143,8 @@ end
 
 function S_groups = assign_S_groups(map, O_groups, topFrac, D)
 % 以子块能量进行唯一指派：每列归属能量最大的组，再在组内取前 topFrac
-Keff = numel(O_groups); energy = zeros(Keff, D);
+Keff  = numel(O_groups);
+energy = zeros(Keff, D);
 for k = 1:Keff
     Ok = O_groups{k};
     if isempty(Ok), continue; end
@@ -152,11 +153,12 @@ for k = 1:Keff
 end
 [~, owner] = max(energy, [], 1);
 S_groups = cell(1, Keff);
+frac = min(max(topFrac, 0), 1);
 for k = 1:Keff
     idx = find(owner == k); cnt = numel(idx);
     if cnt == 0, S_groups{k} = zeros(0,1); continue; end
     e = energy(k, idx); e(~isfinite(e)) = -inf;
-    [~, ord] = sort(e, 'descend'); topK = max(1, min(cnt, floor(min(max(topFrac,0),1)*cnt)));
+    [~, ord] = sort(e, 'descend'); topK = max(1, min(cnt, floor(frac*cnt)));
     S_groups{k} = reshape(idx(ord(1:topK)), [], 1);
 end
 end
@@ -238,17 +240,16 @@ kEff = min(max(1, floor(kAnchors)), numPts);
 mu = mean(Yh,1);
 [~, i0] = max(sum((Yh - mu).^2, 2));
 sel = i0;
+cosCache = clamp_cos(Yh * Yh(sel, :).');
 while numel(sel) < kEff
-    dmin = inf(numPts,1);
-    for j = 1:numel(sel)
-        dmin = min(dmin, 1 - (Yh*Yh(sel(j), :)')); % 角距离 ~ 1-cos
-    end
+    dmin = min(1 - cosCache, [], 2);
     dmin(sel) = -inf;
     [~, ix] = max(dmin);
-    if ismember(ix, sel)
+    if any(sel == ix)
         break;
     end
     sel(end+1) = ix; %#ok<AGROW>
+    cosCache = [cosCache, clamp_cos(Yh * Yh(ix, :).')]; %#ok<AGROW>
 end
 sel = unique(sel, 'stable');
 anchors.values = Y(sel, :);
@@ -263,14 +264,13 @@ function idx = select_diverse_rows(Y, n)
 if n >= N, idx = 1:N; return; end
 mu = mean(Yh,1); [~, i0] = max(sum((Yh - mu).^2, 2));
 sel = i0; cand = true(N,1); cand(i0)=false;
+cosCache = clamp_cos(Yh * Yh(sel, :).');
 while numel(sel) < n
-    Ysel = Yh(sel, :);
-    cosmin = ones(N,1)*inf;
-    for j = 1:numel(sel)
-        cosmin = min(cosmin, 1 - (Yh*Ysel(j, :)')); % 1-cos
-    end
-    cosmin(~cand) = -inf;
-    [~, ix] = max(cosmin); sel(end+1) = ix; cand(ix)=false;
+    dmin = min(1 - cosCache, [], 2);
+    dmin(~cand) = -inf;
+    [~, ix] = max(dmin);
+    sel(end+1) = ix; cand(ix) = false;
+    cosCache = [cosCache, clamp_cos(Yh * Yh(ix, :).')]; %#ok<AGROW>
 end
 idx = sel;
 end
@@ -302,6 +302,10 @@ end
 span = fmax - fmin; span(span==0) = 1; Yn = (Y - fmin) ./ span;
 Yn(~isfinite(Yn)) = 0;
 nrm = sqrt(sum(Yn.^2, 2)); nrm(nrm==0) = 1; Yh = Yn ./ nrm;
+end
+
+function C = clamp_cos(C)
+C = max(min(C, 1), -1);
 end
 
 function OffRows = nse_perturb_rows(OffRows, O_groups, S_groups, map, epsNSE, lower, upper)
