@@ -19,33 +19,78 @@ classdef EAGOA < ALGORITHM
                 m1    = uint16(rand(1,count)*(D-1)+1);
             end
 
+            state = struct('initialized',false,'phase','single', ...
+                           'singleRounds',0,'currentSingleRound',0,'singleIndex',0, ...
+                           'groupRounds',0,'currentGroupRound',0);
+
             while Algorithm.NotTerminated(Population)
-                if Problem.FE / Problem.maxFE < 0.9
-                    temp = 5;
-                else
-                    temp = 1;
-                end
+                if ~state.initialized
+                    ratio = Problem.FE / Problem.maxFE;
+                    if ratio < 0.9
+                        temp = 5;
+                    else
+                        temp = 1;
+                    end
 
-                for j = 1 : temp*2
-                    if Problem.FE >= Problem.maxFE
+                    if ~isempty(m2)
+                        state.singleRounds = max(1,temp*2);
+                        state.phase        = 'single';
+                    else
+                        state.singleRounds = 0;
+                        state.phase        = 'group';
+                    end
+                    if ~isempty(m1)
+                        state.groupRounds = max(1,temp);
+                    else
+                        state.groupRounds = 0;
+                    end
+
+                    if state.singleRounds==0 && state.groupRounds==0
                         break;
                     end
-                    for ij = 1 : length(m2)
-                        if Problem.FE >= Problem.maxFE
-                            break;
+
+                    state.currentSingleRound = 0;
+                    state.singleIndex        = 0;
+                    state.currentGroupRound  = 0;
+                    state.initialized        = true;
+                end
+
+                if strcmp(state.phase,'single') && state.currentSingleRound < state.singleRounds
+                    if isempty(m2)
+                        state.phase = 'group';
+                        continue;
+                    end
+                    idx = state.singleIndex + 1;
+                    if idx > numel(m2)
+                        idx = 1;
+                        state.currentSingleRound = state.currentSingleRound + 1;
+                        if state.currentSingleRound >= state.singleRounds
+                            state.singleIndex = 0;
+                            state.phase       = 'group';
+                            continue;
                         end
-                        drawnow();
-                        Population = EAGOA.SingleOptimization(Problem,Population,m2(ij),R);
                     end
+                    state.singleIndex = idx;
+                    drawnow();
+                    Population = EAGOA.SingleOptimization(Problem,Population,m2(idx),R);
+                    continue;
                 end
 
-                for j = 1 : temp
-                    if Problem.FE >= Problem.maxFE
-                        break;
+                if strcmp(state.phase,'group') && state.currentGroupRound < state.groupRounds
+                    if isempty(m1)
+                        state.initialized = false;
+                        continue;
                     end
                     drawnow();
                     Population = EAGOA.GroupOptimization(Problem,Population,m1,R);
+                    state.currentGroupRound = state.currentGroupRound + 1;
+                    if state.currentGroupRound >= state.groupRounds
+                        state.initialized = false;
+                    end
+                    continue;
                 end
+
+                state.initialized = false;
             end
         end
     end

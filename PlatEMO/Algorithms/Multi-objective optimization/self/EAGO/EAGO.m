@@ -18,94 +18,121 @@ classdef EAGO < ALGORITHM
             [Div_V,con_V] = EAGO.VariableClustering(Problem,Population,nSel,nPer);
             [Div_V1,con_V1,con_V_plus] = EAGO.VariableAnalysis1(Problem,Population,nSel,nPer,R1);
 
-            change = true;
-            N      = Problem.N;
+            change     = true;
+            changeState = struct('initialized',false,'temp',1,'conPass',0,'conTotal',0, ...
+                                 'conIdx',0,'distPass',0,'distTotal',0);
+            intensiveState = struct('initialized',false,'step',0);
 
             while Algorithm.NotTerminated(Population)
-                if Problem.FE / Problem.maxFE < 0.9
-                    temp = 10;
-                else
-                    temp = 1;
-                end
-
                 if change
-                    for j = 1 : temp
-                        if Problem.FE >= Problem.maxFE
-                            break;
+                    if ~changeState.initialized
+                        if Problem.FE / Problem.maxFE < 0.9
+                            changeState.temp = 10;
+                        else
+                            changeState.temp = 1;
                         end
-                        for ij = 1 : length(con_V)
-                            if Problem.FE >= Problem.maxFE
-                                break;
+
+                        if ~isempty(con_V)
+                            changeState.conTotal = max(1,changeState.temp);
+                        else
+                            changeState.conTotal = 0;
+                        end
+                        if ~isempty(Div_V)
+                            changeState.distTotal = max(1,changeState.temp);
+                        else
+                            changeState.distTotal = 0;
+                        end
+
+                        if changeState.conTotal==0 && changeState.distTotal==0
+                            change = false;
+                            changeState.initialized = false;
+                            intensiveState.initialized = false;
+                            continue;
+                        end
+
+                        changeState.conPass  = 0;
+                        changeState.conIdx   = 0;
+                        changeState.distPass = 0;
+                        changeState.initialized = true;
+                    end
+
+                    if changeState.conPass < changeState.conTotal
+                        if isempty(con_V)
+                            changeState.conPass = changeState.conTotal;
+                        else
+                            idx = changeState.conIdx + 1;
+                            if idx > numel(con_V)
+                                idx = 1;
+                                changeState.conPass = changeState.conPass + 1;
+                                if changeState.conPass >= changeState.conTotal
+                                    changeState.conIdx = 0;
+                                    continue;
+                                end
                             end
+                            changeState.conIdx = idx;
                             drawnow();
-                            Population = EAGO.ConvergenceOptimization_R(Problem,Population,con_V(ij),R,c_fmin,c_fmax);
+                            Population = EAGO.ConvergenceOptimization_R(Problem,Population,con_V(idx),R,c_fmin,c_fmax);
+                            continue;
                         end
                     end
 
-                    for j = 1 : temp
-                        if Problem.FE >= Problem.maxFE
-                            break;
-                        end
-                        for i = 1 : 1
-                            if Problem.FE >= Problem.maxFE
-                                break;
-                            end
+                    if changeState.distPass < changeState.distTotal
+                        if isempty(Div_V)
+                            changeState.distPass = changeState.distTotal;
+                        else
                             drawnow();
                             Population = EAGO.DistributionOptimization(Problem,Population,Div_V,R,c_fmin,c_fmax);
+                            changeState.distPass = changeState.distPass + 1;
+                            continue;
                         end
                     end
 
                     change = false;
+                    changeState.initialized = false;
+                    intensiveState.initialized = false;
+                    continue;
                 else
-                    if rank(Population.objs) == Problem.M
-                        objs = Population.objs;
-                        x1   = Population.decs;
-                        R2   = objs\x1;
-                        [Div_V2,con_V1,con_V_plus] = EAGO.VariableAnalysis2(Problem,Population,nSel,nPer,R1);
-                        if length(Div_V2) <= length(Div_V1)
-                            Div_V1 = Div_V2;
-                            R1     = R2;
+                    if ~intensiveState.initialized
+                        if rank(Population.objs) == Problem.M
+                            objs = Population.objs;
+                            x1   = Population.decs;
+                            R2   = objs\x1;
+                            [Div_V2,con_V1,con_V_plus] = EAGO.VariableAnalysis2(Problem,Population,nSel,nPer,R1);
+                            if length(Div_V2) <= length(Div_V1)
+                                Div_V1 = Div_V2;
+                                R1     = R2;
+                            end
+                        else
+                            [Div_V2,con_V1,con_V_plus] = EAGO.VariableAnalysis2(Problem,Population,nSel,nPer,R1);
+                            if length(Div_V2) <= length(Div_V1)
+                                Div_V1 = Div_V2;
+                            end
                         end
-                    else
-                        [Div_V2,con_V1,con_V_plus] = EAGO.VariableAnalysis2(Problem,Population,nSel,nPer,R1);
-                        if length(Div_V2) <= length(Div_V1)
-                            Div_V1 = Div_V2;
-                        end
+                        intensiveState.step = 0;
+                        intensiveState.initialized = true;
                     end
 
-                    for j = 1 : 1
-                        if Problem.FE >= Problem.maxFE
-                            break;
-                        end
-                        for i = 1 : 35
-                            if Problem.FE >= Problem.maxFE
-                                break;
-                            end
-                            drawnow();
-                            Population = EAGO.ConvergenceOptimization_1(Problem,Population,con_V1,R1,c_fmin,c_fmax);
-                        end
-                        if Problem.FE >= Problem.maxFE
-                            break;
-                        end
-                        for i = 1 : 35
-                            if Problem.FE >= Problem.maxFE
-                                break;
-                            end
-                            drawnow();
-                            Population = EAGO.ConvergenceOptimization_2(Problem,Population,con_V_plus,R1,c_fmin,c_fmax);
-                        end
-                        if Problem.FE >= Problem.maxFE
-                            break;
-                        end
-                        for i = 1 : 10
-                            if Problem.FE >= Problem.maxFE
-                                break;
-                            end
-                            drawnow();
-                            Population = EAGO.DistributionOptimization2(Problem,Population,Div_V1,R1,c_fmin,c_fmax);
-                        end
+                    if intensiveState.step < 35
+                        drawnow();
+                        Population = EAGO.ConvergenceOptimization_1(Problem,Population,con_V1,R1,c_fmin,c_fmax);
+                        intensiveState.step = intensiveState.step + 1;
+                        continue;
+                    elseif intensiveState.step < 70
+                        drawnow();
+                        Population = EAGO.ConvergenceOptimization_2(Problem,Population,con_V_plus,R1,c_fmin,c_fmax);
+                        intensiveState.step = intensiveState.step + 1;
+                        continue;
+                    elseif intensiveState.step < 80
+                        drawnow();
+                        Population = EAGO.DistributionOptimization2(Problem,Population,Div_V1,R1,c_fmin,c_fmax);
+                        intensiveState.step = intensiveState.step + 1;
+                        continue;
+                    else
+                        change = true;
+                        changeState.initialized = false;
+                        intensiveState.initialized = false;
+                        continue;
                     end
-                    change = true;
                 end
             end
         end
