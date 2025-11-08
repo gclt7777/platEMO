@@ -116,7 +116,7 @@ classdef OSAE_RCD < ALGORITHM
                 OffDecD_rows = min(max(OffDecD_rows, Problem.lower), Problem.upper);
                 OffspringD = Problem.Evaluation(OffDecD_rows);
 
-                Population = env_select_local([Population, OffspringC, OffspringD], Problem.N);
+                Population = env_select_nsgaiii([Population, OffspringC, OffspringD], Problem.N)
 
                 gen = gen + 1;
             end
@@ -351,4 +351,144 @@ catch
     idx = 1:M; lbl = mod(idx-1, K) + 1;
 end
 O_groups = cell(1, K); for k = 1:K, O_groups{k} = find(lbl == k).'; end
+end
+
+%% ===================== NSGA-III 环境选择（参考向量配额） =====================
+function Population = env_select_nsgaiii(PopBoth, N)
+PopObj = PopBoth.objs; [~,M] = size(PopObj);
+
+% 1) 非支配排序
+[FrontNo, MaxFNo] = NDSort(PopObj, N);
+Next = FrontNo < MaxFNo;           % 直接进入的整层（逻辑向量/列）
+Last = find(FrontNo == MaxFNo);    % 末层候选（列向量）
+Kneed = N - sum(Next);             % 末层还需补的人数
+
+if Kneed <= 0 || isempty(Last)
+    Population = PopBoth(Next);
+    return;
+end
+
+% 2) 生成参考向量（单位单纯形）
+[V,~] = UniformPoint(N, M);
+nv = sqrt(sum(V.^2,2)); nv(nv==0) = 1;
+V = V ./ nv;
+
+% 3) 归一化（在“已选整层 ∪ 末层候选”上做）
+idxNext = find(Next);
+if isempty(idxNext), idxNext = zeros(0,1); else, idxNext = idxNext(:); end
+idxLast = Last(:);
+ChooseIdx = [idxNext; idxLast];                 % ✅ 现在两边都是列向量，且空为 0×1
+Fchoose   = PopObj(ChooseIdx, :);
+[~, FN]   = normalize_nsga3(Fchoose);           % 归一化到截距
+
+% 4) 先把已选整层关联到参考向量，得到壁龛占用 rho
+SelMask  = false(size(ChooseIdx));
+SelMask(1:numel(idxNext)) = true;               % 前 numel(idxNext) 行是已选整层
+FN_sel   = FN(SelMask,:);                       % 可能为空
+if isempty(FN_sel)
+    rho = zeros(size(V,1),1);
+else
+    [sel_niche, ~] = associate_to_ref(FN_sel, V);
+    if isempty(sel_niche)
+        rho = zeros(size(V,1),1);
+    else
+        rho = accumarray(sel_niche, 1, [size(V,1) 1]);
+    end
+end
+
+% 5) 末层关联 + 按配额填满
+FN_last  = FN(~SelMask,:);                      % 对应 Last 的那部分
+[last_niche, last_dperp] = associate_to_ref(FN_last, V);
+
+buckets = cell(size(V,1),1);
+for i = 1:numel(idxLast)                        % 注意用 idxLast 的长度
+    buckets{last_niche(i)} = [buckets{last_niche(i)}; i];
+end
+
+ChosenFromLast = false(numel(idxLast),1);
+while sum(ChosenFromLast) < Kneed
+    minrho = min(rho);
+    J = find(rho == minrho);
+    picked = false;
+    for jj = 1:numel(J)
+        j = J(jj);
+        cand = buckets{j};
+        cand = cand(~ChosenFromLast(cand));
+        if isempty(cand), continue; end
+        if rho(j) == 0
+            [~,ix] = min(last_dperp(cand));
+            idxPick = cand(ix);
+        else
+            idxPick = cand(randi(numel(cand)));
+        end
+        ChosenFromLast(idxPick) = true;
+        rho(j) = rho(j) + 1;
+        picked = true;
+        if sum(ChosenFromLast) >= Kneed, break; end
+    end
+    if ~picked
+        rest = find(~ChosenFromLast);
+        if isempty(rest), break; end
+        take = min(Kneed - sum(ChosenFromLast), numel(rest));
+        ridx = rest(randperm(numel(rest), take));
+        ChosenFromLast(ridx) = true;
+    end
+end
+
+Select = Next(:);                                 % 1) 列向量化
+tmp    = false(size(PopObj,1),1);
+tmp(idxLast(ChosenFromLast)) = true;
+Select = Select | tmp;                            % 2) 列向量 OR
+Select = Select(:);                               % 3) 再保险，保持 N×1
+Population = PopBoth(Select);
+end
+
+
+%% ---------- NSGA-III 归一化：理想点 + 极点/截距兜底 ----------
+function [zmin, FN] = normalize_nsga3(F)
+% F: K×M  原始目标
+zmin = min(F, [], 1);
+Fp = bsxfun(@minus, F, zmin);              % 平移到理想点
+M  = size(F,2);
+
+% 找极点（ASF）
+W = eye(M)*1e-6 + diag(ones(M,1)-1e-6);   % 每次强调一个目标
+asf = zeros(size(F,1), M);
+for i=1:M
+    wi = W(i,:);
+    asf(:,i) = max(bsxfun(@rdivide, Fp, wi), [], 2);
+end
+[~,extIdx] = min(asf, [], 1);             % 每个目标的极点索引
+E = Fp(extIdx, :);                         % M×M
+
+% 计算截距 a
+useMax = false;
+if rank(E) == M
+    alpha = E \ ones(M,1);
+    a = 1 ./ alpha';
+    if any(~isfinite(a)) || any(a<=0)
+        useMax = true;
+    end
+else
+    useMax = true;
+end
+if useMax
+    a = max(Fp, [], 1);
+end
+a(a==0) = 1;                               % 防零
+
+FN = bsxfun(@rdivide, Fp, a);              % 归一化
+end
+
+%% ---------- 关联到参考向量：返回壁龛编号与垂直距离 ----------
+function [niche, dperp] = associate_to_ref(FN, V)
+% FN: K×M（归一化目标）；V: R×M（单位参考向量）
+if isempty(FN)
+    niche = zeros(0,1); dperp = zeros(0,1); return;
+end
+normF = sqrt(sum(FN.^2, 2)); normF(normF==0) = eps;
+Cos = (FN * V') ./ normF;                   % cos(theta)，因 |V|=1
+Cos = max(min(Cos,1),-1);
+dperp_all = normF .* sqrt(1 - Cos.^2);
+[dperp, niche] = min(dperp_all, [], 2);
 end
