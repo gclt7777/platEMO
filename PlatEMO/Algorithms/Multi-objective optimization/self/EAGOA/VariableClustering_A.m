@@ -1,4 +1,4 @@
-function [PV,DV] = VariableClustering_A(Global,Population,nSel,nPer)
+function [PV,DV] = VariableClustering_A(Problem,Population,nSel,nPer)
 % Detect the kind of each decision variable
 
 %------------------------------- Copyright --------------------------------
@@ -31,7 +31,7 @@ function [PV,DV] = VariableClustering_A(Global,Population,nSel,nPer)
             break;
         end
         Decs      = repmat(Population(Sample).decs,nPer,1);
-        Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1);
+        Decs(:,i) = unifrnd(Problem.lower(i),Problem.upper(i),size(Decs,1),1);
         newPopu   = Problem.Evaluation(Decs);
         if length(newPopu) < nSel*nPer
             break;
