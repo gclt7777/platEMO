@@ -74,6 +74,9 @@ classdef BAXOSD < ALGORITHM
             end
 
             %% 进化循环
+            lower = Problem.lower;
+            upper = Problem.upper;
+
             while obj.NotTerminated(Population)
                 Y = Population.objs;
                 X = local_get_dec(Population, Problem);
@@ -106,8 +109,9 @@ classdef BAXOSD < ALGORITHM
                 % --------- C-phase：组内线性 AE 收敛生成 ---------
                 OffspringC = [];
                 if Nc > 0
-                    candXc = [];
+                    candCells = cell(1, numel(obj.Ok));
                     quota  = ceil(max(1, Nc / max(1,numel(obj.Ok))));
+                    cidx   = 0;
                     for k = 1:numel(obj.Ok)
                         Ik = obj.Ok{k}; Jk = obj.Sk{k};
                         if isempty(Ik) || isempty(Jk) || isempty(obj.Pk{k}) || isempty(obj.Bk{k}), continue; end
@@ -117,10 +121,17 @@ classdef BAXOSD < ALGORITHM
                         % 仅写回 S_k 列（线性 AE 解码到 X_Sk）
                         Xhat_Sk = apply_map_sub_linearAE(Yk_new, Ik, Jk, ...
                                         obj.Pk{k}, obj.Bk{k}, obj.muYk{k}, obj.sigYk{k}, obj.muXk{k}, obj.sigXk{k}, ...
-                                        X, eta, Problem.lower, Problem.upper);
-                        candXc = [candXc; Xhat_Sk]; %#ok<AGROW>
+                                        X, eta, lower, upper);
+                        if ~isempty(Xhat_Sk)
+                            cidx = cidx + 1;
+                            candCells{cidx} = Xhat_Sk;
+                        end
                     end
-                    if isempty(candXc), candXc = X; end
+                    if cidx == 0
+                        candXc = X;
+                    else
+                        candXc = cat(1, candCells{1:cidx});
+                    end
                     OffspringC = Problem.Evaluation(candXc);
                 end
 
@@ -129,17 +140,25 @@ classdef BAXOSD < ALGORITHM
                 if Nd > 0
                     [Y_dirs] = rvea_generate_dirs(Y, obj.V, obj.mixAnch, obj.alphaDir, obj.sigma0, obj.beta_rho, theta, Nd);
                     % 对每个列簇分别写回（避免串扰），叠加候选
-                    candXd = [];
+                    candCells = cell(1, numel(obj.Ok));
+                    didx = 0;
                     for k = 1:numel(obj.Ok)
                         Ik = obj.Ok{k}; Jk = obj.Sk{k};
                         if isempty(Ik) || isempty(Jk) || isempty(obj.Pk{k}) || isempty(obj.Bk{k}), continue; end
                         Yk_new = Y_dirs(:, Ik);
                         Xhat_Sk = apply_map_sub_linearAE(Yk_new, Ik, Jk, ...
                                         obj.Pk{k}, obj.Bk{k}, obj.muYk{k}, obj.sigYk{k}, obj.muXk{k}, obj.sigXk{k}, ...
-                                        X, eta, Problem.lower, Problem.upper);
-                        candXd = [candXd; Xhat_Sk]; %#ok<AGROW>
+                                        X, eta, lower, upper);
+                        if ~isempty(Xhat_Sk)
+                            didx = didx + 1;
+                            candCells{didx} = Xhat_Sk;
+                        end
                     end
-                    if isempty(candXd), candXd = X; end
+                    if didx == 0
+                        candXd = X;
+                    else
+                        candXd = cat(1, candCells{1:didx});
+                    end
                     OffspringD = Problem.Evaluation(candXd);
                 end
 
@@ -301,12 +320,16 @@ Xhat = repmat(Xbase, rep, 1); Xhat = Xhat(1:Nnew, :);
 Xhat(:,Jk) = (1-eta).*Xhat(:,Jk) + eta.*Xpred_Sk;
 % 边界
 lo = lower(:)'; up = upper(:)';
-Xhat = min(max(Xhat, lo.*ones(Nnew,1)), up.*ones(Nnew,1));
+Xhat = min(max(Xhat, lo), up);
 end
 
 % ---- 生成 D-phase 的全维 Y_dir（RVEA 行分组引导） ----
 function [Y_dirs] = rvea_generate_dirs(Y, V, mixAnch, alphaDir, sigma0, beta_rho, theta, Nd)
 N = size(Y,1); M = size(Y,2); NV = size(V,1);
+if Nd <= 0 || NV == 0
+    Y_dirs = zeros(0,M);
+    return;
+end
 mins = min(Y,[],1); Ysh = Y - mins;
 cos_xv = 1 - pdist2(Ysh, V, 'cosine');
 cos_xv = max(-1,min(1,cos_xv)); cos_xv(isnan(cos_xv))=-1;
@@ -328,19 +351,19 @@ for i=1:NV
     end
 end
 
-% 将 Nd 平均分配到扇区（简化；可按 rho 自适应）
-qi_all = max(1, floor(Nd / max(NV,1)));
+% 将 Nd 平均分配到扇区
+quota = distribute_quota_even(Nd, NV);
 Y_dirs = zeros(0,M);
 
 % 预取全部锚点矩阵（用于凸组合）
 haveAnch = anchors>0;
 Yanch = Y(anchors(haveAnch), :);
 
+scaleR = median(sqrt(sum(Ysh.^2,2))+eps);
+
 for i=1:NV
-    qi = qi_all; if qi<=0, continue; end
+    qi = quota(i); if qi<=0, continue; end
     sig_i = sigma0 * max(0.05, 1-theta) * (max(mean(rho),eps)/(rho(i)+eps))^beta_rho;
-    % 参考向量导向噪声尺度
-    scaleR = median(sqrt(sum(Ysh.^2,2))+eps);
 
     Y_i = zeros(qi, M);
     for t=1:qi
@@ -459,4 +482,17 @@ end
 function W = sparse_dirichlet(N, K, conc)
 r = rand(N,K) .^ (1/max(conc,1e-3));
 W = r ./ sum(r,2);
+end
+
+function quota = distribute_quota_even(Nd, NV)
+quota = zeros(1, NV);
+if NV <= 0 || Nd <= 0
+    return;
+end
+base = floor(Nd / NV);
+quota(:) = base;
+remainder = Nd - base * NV;
+if remainder > 0
+    quota(1:remainder) = quota(1:remainder) + 1;
+end
 end
