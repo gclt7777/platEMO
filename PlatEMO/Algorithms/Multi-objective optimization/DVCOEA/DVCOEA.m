@@ -3,13 +3,13 @@ function DVCOEA(Global)
 [nSel,nPer,nCor] = Global.ParameterSet(5,50,5);
 %% Generate random population
 Archive = Global.Initialization();
-%% ÓÃÓÚVariableClusterºÍCorrelationAnalysis
+%% VariableClusterCorrelationAnalysis
 %% Detect the group of each convergence-related variables
-% ¾ö²ß±äÁ¿·ÖÀà
+% ß±
 % CV:convergence-related variables;CO:contribute objectives of CV
 % DV:diversity-related variables
 [CV,DV,CO] = VariableClustering(Global,Archive,nSel,nPer);
-% Ïà»¥×÷ÓÃ·ÖÎöºóµÃµ½µÄÊÕÁ²ÐÔ¾ö²ß±äÁ¿·Ö×é
+% à»¥Ã·ÃµÔ¾ß±
 CVgroup = CorrelationAnalysis(Global,Archive,CV,nCor);
 CXV = [];
 for i = 1:length(CVgroup)
@@ -17,7 +17,7 @@ for i = 1:length(CVgroup)
        CXV = [CXV,CVgroup{i}];
    end
 end
-% °´¹±Ï×Ä¿±ê·Ö×é
+% Ä¿
 subSet = cell(1,Global.M);
 for i = 1:length(CV)
 %   if 
@@ -33,8 +33,13 @@ end
 %% Optimization
 while Global.NotTermination(Archive)
     % Convergence optimization
-    for m = 1:Gloabl.M
-        Archive((m-1)*50+1:m*50) = ConvergenceOptimization(Archive((m-1)*50+1:m*50),subSet{m});
+    subPop = ceil(length(Archive)/Global.M);
+    for m = 1:Global.M
+        index = (m-1)*subPop+1:min(m*subPop,length(Archive));
+        if isempty(index)
+            continue;
+        end
+        Archive(index) = ConvergenceOptimization(Archive(index),subSet{m});
     end
     % Distribution optimization
     Archive = DistributionOptimization(Archive,DV,CXV);
