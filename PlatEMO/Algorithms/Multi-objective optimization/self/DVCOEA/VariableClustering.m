@@ -1,4 +1,4 @@
-function [CV,DV,CO] = VariableClustering(Global,Population,nSel,nPer)
+function [CV,DV,CO] = VariableClustering(Problem,Population,nSel,nPer)
 % Detect the type of each decision variable
 
     [N,D] = size(Population.decs);
@@ -16,14 +16,14 @@ function [CV,DV,CO] = VariableClustering(Global,Population,nSel,nPer)
     processed = false(1,D);
     for i = 1 : D
         drawnow();
-        remainFE = Global.evaluation - Global.evaluated;
+        remainFE = Problem.maxFE - Problem.FE;
         maxPer   = floor(remainFE/max(1,nSel));
         if maxPer <= 0
             break;
         end
         currPer = min(nPer,maxPer);
         Decs      = repmat(Population(Sample).decs,currPer,1);
-        Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1);
+        Decs(:,i) = unifrnd(Problem.lower(i),Problem.upper(i),size(Decs,1),1);
         newPopu   = INDIVIDUAL(Decs);
         for j = 1 : nSel
             Points = newPopu(j:nSel:end).objs;
