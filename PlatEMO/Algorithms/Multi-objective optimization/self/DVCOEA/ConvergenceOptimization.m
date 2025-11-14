@@ -1,11 +1,13 @@
 function Population = ConvergenceOptimization(Problem,Population,CVgroup)
 % Convergence optimization for a group of convergence-related variables
 
+    N = length(Population);
+    D = size(Population.decs,2);
+    CVgroup = CVgroup(CVgroup>=1 & CVgroup<=D);
+    CVgroup = unique(CVgroup,'stable');
     if isempty(CVgroup)
         return;
     end
-    N = length(Population);
-    D = size(Population.decs,2);
     % Select parents
     Con         = sum(Population.objs,2);
     MatingPool  = TournamentSelection(2,2*N,Con);
