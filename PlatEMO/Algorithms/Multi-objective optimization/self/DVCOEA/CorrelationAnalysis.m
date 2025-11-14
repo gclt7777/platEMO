@@ -2,13 +2,22 @@ function CVSet = CorrelationAnalysis(Global,Population,CV,nCor)
 % Detect the group of each convergence-related variable
 
     CVSet = cell(0);
+    budgetExhausted = false;
     for v = CV(:)'
+        if budgetExhausted
+            CVSet{end+1} = v; %#ok<AGROW>
+            continue;
+        end
         related = [];
         for d = 1 : length(CVSet)
             group = CVSet{d};
             sign  = false;
             for u = group
                 for i = 1 : nCor
+                    if Global.evaluation - Global.evaluated < 3
+                        budgetExhausted = true;
+                        break;
+                    end
                     p    = Population(randi(length(Population)));
                     a2   = unifrnd(Global.lower(v),Global.upper(v));
                     b2   = unifrnd(Global.lower(u),Global.upper(u));
@@ -27,10 +36,17 @@ function CVSet = CorrelationAnalysis(Global,Population,CV,nCor)
                 end
                 if sign
                     break;
+                elseif budgetExhausted
+                    break;
                 end
             end
+            if budgetExhausted
+                break;
+            end
         end
-        if isempty(related)
+        if budgetExhausted
+            CVSet{end+1} = v; %#ok<AGROW>
+        elseif isempty(related)
             CVSet{end+1} = v; %#ok<AGROW>
         else
             merged = unique([CVSet{related},v]);
