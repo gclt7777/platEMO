@@ -1,4 +1,4 @@
-function Population = ConvergenceOptimization(Population,CVgroup)
+function Population = ConvergenceOptimization(Problem,Population,CVgroup)
 % Convergence optimization for a group of convergence-related variables
 
     if isempty(CVgroup)
@@ -15,7 +15,7 @@ function Population = ConvergenceOptimization(Population,CVgroup)
         Population(MatingPool(end/2+1:end)).decs,...
         {1,0.5,D/length(CVgroup)/2,20});
     OffDec(:,CVgroup) = NewDec(:,CVgroup);
-    Offspring         = INDIVIDUAL(OffDec);
+    Offspring         = Problem.Evaluation(OffDec);
     better            = all(Offspring.objs<=Population.objs,2) & any(Offspring.objs<Population.objs,2);
     Population(better) = Offspring(better);
 end
