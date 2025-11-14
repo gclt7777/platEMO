@@ -1,4 +1,4 @@
-function Population = DistributionOptimization(Population,DV,CXV)
+function Population = DistributionOptimization(Problem,Population,DV,CXV)
 % Distribution optimization focusing on diversity-related variables
 
     if nargin < 3
@@ -15,6 +15,6 @@ function Population = DistributionOptimization(Population,DV,CXV)
     parentDec = Population(randi(N,1,N)).decs;
     NewDec  = GA(parentDec);
     OffDec(:,DV) = NewDec(:,DV);
-    Offspring    = INDIVIDUAL(OffDec);
+    Offspring    = Problem.Evaluation(OffDec);
     Population   = EnvironmentalSelection([Population,Offspring],N);
 end
