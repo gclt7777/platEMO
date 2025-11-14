@@ -25,7 +25,7 @@ function CVSet = CorrelationAnalysis(Problem,Population,CV,nCor)
                     decs(1,v)     = a2;
                     decs(2,u)     = b2;
                     decs(3,[v,u]) = [a2,b2];
-                    F = INDIVIDUAL(decs);
+                    F = Problem.Evaluation(decs);
                     delta1 = F(1).objs - p.objs;
                     delta2 = F(3).objs - F(2).objs;
                     if any(delta1.*delta2<0)

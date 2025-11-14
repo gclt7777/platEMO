@@ -48,11 +48,11 @@ classdef DVCOEA < ALGORITHM
                 % Convergence optimization
                 for m = 1 : Problem.M
                     if ~isempty(subSet{m})
-                        Population = ConvergenceOptimization(Population,subSet{m});
+                        Population = ConvergenceOptimization(Problem,Population,subSet{m});
                     end
                 end
                 % Distribution optimization
-                Population = DistributionOptimization(Population,DV,CXV);
+                Population = DistributionOptimization(Problem,Population,DV,CXV);
             end
         end
     end
