@@ -248,6 +248,15 @@ function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,N
 % 说明：早期版本存在用于控制调试输出的 verboseLog 标志。为兼容遗留调用，
 % 此处接受多余的可变参数但完全忽略（环境选择阶段现已无任何日志逻辑）。
 
+    % 明确占位以兼容仍携带 verboseLog 的调用，避免未定义变量错误
+    verboseLog = false; %#ok<NASGU>
+    if ~isempty(varargin)
+        extra = varargin{1};
+        if islogical(extra) && isscalar(extra)
+            verboseLog = extra; %#ok<NASGU>
+        end
+    end
+
     PopObj = PopAll.objs;
     [Ncand,M]  = size(PopObj);
     NV     = size(V,1);

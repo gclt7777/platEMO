@@ -29,3 +29,7 @@
   ```
 - The code respects the user-specified population size `N`. For many-objective WFG/DTLZ settings, start with the default reference vectors by omitting `N`; for LSMOP, increasing `N` to 120–200 can stabilize sector coverage.
 - Environmental selection is RVEA-APD with feasibility-first handling. If an experiment needs stronger pressure on feasibility, adjust constraint treatment inside `Operator_DPhase` and `EnvironmentalSelection_BAXOSD` following the constraints hook noted above.
+
+## Known issue: legacy `verboseLog`
+- Earlier drafts of `EnvironmentalSelection_BAXOSD` used a `verboseLog` switch to print diagnostics. Recent versions removed logging entirely, so stale copies that still contain `if verboseLog` guards will throw the MATLAB error “函数或变量 'verboseLog' 无法识别.”
+- Update to the current code (or ensure the function signature includes a placeholder that ignores extra arguments) to avoid the undefined-variable error while keeping selection behavior unchanged.
