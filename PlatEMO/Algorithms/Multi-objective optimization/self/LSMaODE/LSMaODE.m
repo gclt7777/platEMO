@@ -28,7 +28,7 @@ classdef LSMaODE < ALGORITHM
                             for k = 1 : Problem.D
                                 Parent         = Population(i);
                                 Offspring_dec  = Mutation(localgroup,i,k,Parent,lower,upper,mutationStrength,localPopulation,[]);
-                                Offspring      = INDIVIDUAL(Offspring_dec);
+                                Offspring      = Problem.Evaluation(Offspring_dec);
                                 mat_Population = [Parent,Offspring];
                                 [FrontNo,MaxFNo] = NDSort(mat_Population.objs,mat_Population.cons,2);
                                 if MaxFNo ~= 1
@@ -61,7 +61,7 @@ classdef LSMaODE < ALGORITHM
                         if i > localgroup
                             Parent         = Population(i);
                             Offspring_dec  = Mutation(localgroup,i,[],Parent,lower,upper,mutationStrength,Population,L1list);
-                            Offspring      = INDIVIDUAL(Offspring_dec);
+                            Offspring      = Problem.Evaluation(Offspring_dec);
                             mat_Population = [Parent,Offspring];
                             [FrontNo,MaxFNo] = NDSort(mat_Population.objs,mat_Population.cons,2);
                             if MaxFNo ~= 1
