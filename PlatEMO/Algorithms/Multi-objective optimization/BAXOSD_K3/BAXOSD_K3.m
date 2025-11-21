@@ -462,7 +462,7 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
     [N,M] = size(Y);
     D = size(X,2);
 
-    % 约束信息：优先在可行扇区采样
+    % 约束信息：优先在可行扇区采样；复用 PlatEMO 的锦标赛工具以保持接口一致
     if isempty(Pop.cons)
         CV = zeros(N,1);
     else
@@ -470,10 +470,15 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
     end
     feasibleMask = CV==0;
 
-    % 扇区归属（按平移后角度）
-    Y0 = Y - repmat(min(Y,[],1),N,1);
-    Angle = acos(max(0,1 - pdist2(Y0,V,'cosine')));
+    % 扇区归属（按平移后角度），并预先算好每个个体的 APD 以便锦标赛使用
+    Y0     = Y - repmat(min(Y,[],1),N,1);
+    Angle  = acos(max(0,1 - pdist2(Y0,V,'cosine')));
     [~,sector] = min(Angle,[],2);
+    normY  = sqrt(sum(Y0.^2,2));
+    gammaS = gammaV(sector);
+    idxLin = sub2ind(size(Angle),(1:N)',sector);
+    apdRaw = (1+M*theta*(Angle(idxLin)./gammaS)).*normY;
+    apdAll = apdRaw + (1e6+CV).*~feasibleMask;
 
     Fd  = 0.90 - 0.40*theta; Fd = max(0.50,min(0.90,Fd));
     CRd = 0.60 + 0.30*theta; CRd = max(0.60,min(0.90,CRd));
@@ -481,34 +486,39 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
     OffX = zeros(nD,D);
 
     for t = 1:nD
-        % 1) 选一个扇区（按人口加权）
+        % 1) 选一个扇区（按可行数量加权，兜底为总数），并用锦标赛在该扇区内抽样父代
         sList = unique(sector)';
         countsAll = arrayfun(@(s) sum(sector==s), sList);
         countsFea = arrayfun(@(s) sum(sector==s & feasibleMask), sList);
+        weights   = countsAll;
         if any(countsFea>0)
             weights = countsFea;
-        else
-            weights = countsAll;
         end
         s = randsample(sList,1,true,weights);
 
-        % 扇区内样本索引
-        idx = find(sector==s);
-        if any(feasibleMask(idx))
-            idx = idx(feasibleMask(idx));
-        end
-        if numel(idx) < 3
-            idx = find(feasibleMask);
-        end
-        if numel(idx) < 3
-            idx = 1:N; % 兜底：全局抽
+        maskS = (sector==s);
+        if any(maskS)
+            fitLocal = apdAll;
+            fitLocal(~maskS) = inf; % 锦标赛只会在当前扇区内选择
+        else
+            fitLocal = apdAll; % 极端兜底：全局
         end
 
-        % 2) 目标个体 i 与父代 r1,r2,r3
-        i  = idx(randi(numel(idx)));
-        r1 = idx(randi(numel(idx)));
-        r2 = idx(randi(numel(idx)));
-        r3 = idx(randi(numel(idx)));
+        picks = TournamentSelection(2,4,fitLocal);
+        if numel(unique(picks)) < 4
+            % 锦标赛偶有重复时，补充随机可行索引，确保 DE/rand/1/bin 的 3 父不同
+            need = 4 - numel(picks);
+            pool = find(isfinite(fitLocal));
+            pool = setdiff(pool,picks,'stable');
+            pool = pool(randperm(numel(pool)));
+            fill = pool(1:min(need,numel(pool)));
+            picks = [picks, fill];
+            if numel(picks) < 4
+                picks = [picks, picks(randperm(numel(picks),4-numel(picks)))];
+            end
+            picks = picks(1:4);
+        end
+        i  = picks(1); r1 = picks(2); r2 = picks(3); r3 = picks(4);
 
         % 3) 目标空间 DE/rand/1/bin
         v  = Y(r1,:) + Fd*(Y(r2,:) - Y(r3,:));
