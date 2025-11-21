@@ -241,10 +241,13 @@ function S_groups = design_S_AP_balanced(T, O_groups, rhoA)
 end
 
 %% ======================= 环境选择 =======================
-function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,Ntar)
+function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,Ntar,varargin)
 % RVEA-APD 环境选择（可行优先，每参考向量先留 1）
 % 若选不满 Ntar，再从剩余个体中按 APD 补满，优先补 C/D 个体
 %
+% 说明：早期版本存在用于控制调试输出的 verboseLog 标志。为兼容遗留调用，
+% 此处接受多余的可变参数但完全忽略（环境选择阶段现已无任何日志逻辑）。
+
     PopObj = PopAll.objs;
     [Ncand,M]  = size(PopObj);
     NV     = size(V,1);
