@@ -273,12 +273,15 @@ function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,N
     end
 
     % 参考向量最小夹角 gamma
-    cosineVV = 1 - pdist2(V,V,'cosine');
+    Vsafe    = add_min_norm_padding(V,1e-12);
+    cosineVV = 1 - pdist2(Vsafe,Vsafe,'cosine');
     cosineVV(1:size(cosineVV,1)+1:end) = 0;
     gamma = min(acos(max(-1,min(1,cosineVV))),[],2);
 
     % 关联到参考向量
-    Angle = acos(max(0,1 - pdist2(PopObjShift,V,'cosine'))); % 数值安全
+    PopObjShift = add_min_norm_padding(PopObjShift,1e-12);
+    Vsafe       = add_min_norm_padding(V,1e-12);
+    Angle       = acos(max(0,1 - pdist2(PopObjShift,Vsafe,'cosine'))); % 数值安全
     [~,associate] = min(Angle,[],2);
 
     % ---------- 第一步：每扇区先挑 1 个 ----------
@@ -369,6 +372,17 @@ function score = local_apd_score(idx,PopObjShift,Angle,associate,gamma,CV,M,thet
             % 不可行解给一个大罚值
             score(t) = 1e6 + CV(j);
         end
+    end
+end
+
+
+% ====== 防止近零向量触发 pdist2 的极小量级警告 ======
+function Xpad = add_min_norm_padding(X, eps_val)
+    Xpad  = X;
+    norms = sqrt(sum(X.^2,2));
+    tiny  = norms < eps_val;
+    if any(tiny)
+        Xpad(tiny,:) = Xpad(tiny,:) + eps_val;
     end
 end
 
@@ -472,7 +486,9 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
 
     % 扇区归属（按平移后角度），并预先算好每个个体的 APD 以便锦标赛使用
     Y0     = Y - repmat(min(Y,[],1),N,1);
-    Angle  = acos(max(0,1 - pdist2(Y0,V,'cosine')));
+    Y0     = add_min_norm_padding(Y0,1e-12);
+    Vsafe  = add_min_norm_padding(V,1e-12);
+    Angle  = acos(max(0,1 - pdist2(Y0,Vsafe,'cosine')));
     [~,sector] = min(Angle,[],2);
     normY  = sqrt(sum(Y0.^2,2));
     gammaS = gammaV(sector);
