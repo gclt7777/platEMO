@@ -1,6 +1,6 @@
 classdef BAXOSD_K3 < ALGORITHM
 % <2025> <multi/many> <real/integer/label/binary/permutation> <large>
-% BAXOSD_LOG : Bi-Axis eXploration with O–S–D（带环境选择日志）
+% BAXOSD_K3 : Bi-Axis eXploration with O–S–D
 %
 % 核心不变：
 %   - C-phase（列分组/收敛）：目标列分组 O_k → 组内线性 AE(PCA) 的潜空间 latent-DE → 仅写回对应 S_k（半步融合）
@@ -12,8 +12,8 @@ classdef BAXOSD_K3 < ALGORITHM
 
     methods
         function main(Algorithm,Problem)
-            %% 参数设置（公开 alpha + 参考向量频率 fr + 日志开关 verboseLog）
-            [alpha, fr, verboseLog] = Algorithm.ParameterSet(1.6, inf, 0);
+            %% 参数设置（公开 alpha + 参考向量频率 fr）
+            [alpha, fr] = Algorithm.ParameterSet(1.6, inf);
 
             % 决策列中 A 类变量的比例
             rhoA          = 0.5;   % A 占总决策列的比例
@@ -81,12 +81,12 @@ classdef BAXOSD_K3 < ALGORITHM
                 % ---------- D-phase: 扇区内目标空间 DE，Δy·T 全列写回 ----------
                 OffD = Operator_DPhase(Population, nD, V, gammaV, map, theta, eta, Problem);
 
-                % ---------- RVEA-APD 环境选择 + 日志 ----------
+                % ---------- RVEA-APD 环境选择 ----------
                 nBase = length(Population);
                 nCnow = length(OffC);
                 nDnow = length(OffD);
                 Population = EnvironmentalSelection_BAXOSD([Population,OffC,OffD], V, theta, ...
-                                          curGen, nBase, nCnow, nDnow, Problem.N, verboseLog);
+                                          nBase, nCnow, nDnow, Problem.N);
             end
         end
     end
@@ -240,14 +240,11 @@ function S_groups = design_S_AP_balanced(T, O_groups, rhoA)
     end
 end
 
-%% ======================= 环境选择（带日志） =======================
-function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,curGen,nBase,nC,nD,Ntar,verboseLog)
+%% ======================= 环境选择 =======================
+function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,Ntar)
 % RVEA-APD 环境选择（可行优先，每参考向量先留 1）
 % 若选不满 Ntar，再从剩余个体中按 APD 补满，优先补 C/D 个体
 %
-% 日志格式：
-% [BAX_ENV][gxxxx] t=0.xxx N=sel/Ntar | c=nb/nc/nd | s=sb/sc/sd | u=us/uc
-
     PopObj = PopAll.objs;
     [Ncand,M]  = size(PopObj);
     NV     = size(V,1);

@@ -13,7 +13,6 @@
 - **Grouping stability:** cache `O_groups` and `S_groups` along with their statistics; when periodic regrouping is skipped, reuse previous PCA bases or inertia weights to reduce per-generation overhead on large M.
 - **Vectorization:** replace per-offspring loops in C/D phases with batched sampling where feasible (e.g., pre-generating parent indices and PCA bases per group) to better align with PlatEMO vectorized operators.
 - **Constraint handling:** pass constraint violations into the D-phase sector selection to bias sampling toward feasible sectors, mirroring RVEA’s feasibility-first philosophy during variation as well as selection.
-- **Logging hooks:** align log formatting with other PlatEMO algorithms (e.g., using `Algorithm.NotTerminated` callbacks) so experiment scripts can toggle verbose reporting without editing the operator code.
 - **Test coverage:** validate the operator on LSMOP, DTLZ, and WFG suites with varying objective counts to ensure `rk_cap_minmax` and `rhoA` keep groups non-empty and the half-step fusion stays stable under different decision bounds.
 
 ## Usage on PlatEMO
