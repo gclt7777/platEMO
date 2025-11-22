@@ -1,6 +1,6 @@
 classdef BAXOSD_K3 < ALGORITHM
 % <2025> <multi/many> <real/integer/label/binary/permutation> <large>
-% BAXOSD_LOG : Bi-Axis eXploration with O–S–D（带环境选择日志）
+% BAXOSD_K3 : Bi-Axis eXploration with O–S–D
 %
 % 核心不变：
 %   - C-phase（列分组/收敛）：目标列分组 O_k → 组内线性 AE(PCA) 的潜空间 latent-DE → 仅写回对应 S_k（半步融合）
@@ -12,8 +12,8 @@ classdef BAXOSD_K3 < ALGORITHM
 
     methods
         function main(Algorithm,Problem)
-            %% 参数设置（唯一外参 alpha，rhoA 固定在内部）
-            alpha = Algorithm.ParameterSet(1.6);
+            %% 参数设置（公开 alpha + 参考向量频率 fr）
+            [alpha, fr] = Algorithm.ParameterSet(1.6, inf);
 
             % 决策列中 A 类变量的比例
             rhoA          = 0.5;   % A 占总决策列的比例
@@ -22,7 +22,6 @@ classdef BAXOSD_K3 < ALGORITHM
             rk_cap_minmax = [1,4]; % PCA 维度夹取范围
             kappa_tar     = 1e6;   % T 条件数限幅目标
             eta           = 0.5;   % 半步融合
-            fr            = inf;   % 参考向量自适应频率（Inf 表示基本不动）
 
             %% 参考向量 & 初始种群（路线 A：严格尊重 Problem.N）
             N0  = Problem.N;                       % 记录用户设定的种群规模
@@ -37,10 +36,11 @@ classdef BAXOSD_K3 < ALGORITHM
             gammaV = min(acos(max(-1,min(1,cosineVV))),[],2); 
 
             % 初始线性映射 T（z-score 域）
-            map = fit_T_linear_zscore(Population.objs, Population.decs, kappa_tar);
+            popMat = pop_matrix_view(Population);
+            map = fit_T_linear_zscore(popMat.Y, popMat.X, kappa_tar);
 
             % 初始 O-S-D 分组（g = 1）
-            [O_groups,K] = group_objectives_angle(Population.objs, Problem.M); %#ok<ASGLU>
+            [O_groups,K] = group_objectives_angle(popMat.Y, Problem.M); %#ok<ASGLU>
             S_groups     = design_S_AP_balanced(map.T, O_groups, rhoA);
             curGen       = 1;
 
@@ -50,20 +50,25 @@ classdef BAXOSD_K3 < ALGORITHM
                 curGen = max(1,ceil(Problem.FE/Problem.N));
 
                 % ------- 参考向量自适应（简单按频率） -------
-                if ~mod(curGen, max(1,ceil(fr*Problem.maxFE/Problem.N)))
-                    % 注意：这里不再假设 size(V,1) >= Problem.N，直接整体更新
-                    V = ReferenceVectorAdaptation(Population.objs,V0);
-                    cosineVV = 1 - pdist2(V,V,'cosine');
-                    cosineVV(1:size(cosineVV,1)+1:end) = 0;
-                    gammaV   = min(acos(max(-1,min(1,cosineVV))),[],2); %#ok<NASGU>
+                if ~isinf(fr)
+                    freq = max(1,ceil(fr*Problem.maxFE/Problem.N));
+                    if ~mod(curGen, freq)
+                        % 注意：这里不再假设 size(V,1) >= Problem.N，直接整体更新
+                        V = ReferenceVectorAdaptation(Population.objs,V0);
+                        cosineVV = 1 - pdist2(V,V,'cosine');
+                        cosineVV(1:size(cosineVV,1)+1:end) = 0;
+                        gammaV   = min(acos(max(-1,min(1,cosineVV))),[],2); %#ok<NASGU>
+                    end
                 end
 
                 % ------- 每代拟合线性映射 T（z-score 域） -------
-                map = fit_T_linear_zscore(Population.objs, Population.decs, kappa_tar);
+                popMat = pop_matrix_view(Population);
+                map = fit_T_linear_zscore(popMat.Y, popMat.X, kappa_tar);
 
                 % ------- 周期性重分组与唯一指派（从第 2 代开始） -------
                 if curGen > 1 && mod(curGen-1,periodGroup)==0
-                    [O_groups,K] = group_objectives_angle(Population.objs, Problem.M); %#ok<ASGLU>
+                    popMat = pop_matrix_view(Population);
+                    [O_groups,K] = group_objectives_angle(popMat.Y, Problem.M); %#ok<ASGLU>
                     S_groups     = design_S_AP_balanced(map.T, O_groups, rhoA);
                 end
 
@@ -79,12 +84,12 @@ classdef BAXOSD_K3 < ALGORITHM
                 % ---------- D-phase: 扇区内目标空间 DE，Δy·T 全列写回 ----------
                 OffD = Operator_DPhase(Population, nD, V, gammaV, map, theta, eta, Problem);
 
-                % ---------- RVEA-APD 环境选择 + 日志 ----------
+                % ---------- RVEA-APD 环境选择 ----------
                 nBase = length(Population);
                 nCnow = length(OffC);
                 nDnow = length(OffD);
                 Population = EnvironmentalSelection_BAXOSD([Population,OffC,OffD], V, theta, ...
-                                          curGen, nBase, nCnow, nDnow, Problem.N);
+                                          nBase, nCnow, nDnow, Problem.N);
             end
         end
     end
@@ -238,15 +243,26 @@ function S_groups = design_S_AP_balanced(T, O_groups, rhoA)
     end
 end
 
-%% ======================= 环境选择（带日志） =======================
-function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,curGen,nBase,nC,nD,Ntar)
+%% ======================= 环境选择 =======================
+function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,Ntar,varargin)
 % RVEA-APD 环境选择（可行优先，每参考向量先留 1）
 % 若选不满 Ntar，再从剩余个体中按 APD 补满，优先补 C/D 个体
 %
-% 日志格式：
-% [BAX_ENV][gxxxx] t=0.xxx N=sel/Ntar | c=nb/nc/nd | s=sb/sc/sd | u=us/uc
+% 说明：早期版本存在用于控制调试输出的 verboseLog 标志。为兼容遗留调用，
+% 此处接受多余的可变参数但完全忽略（环境选择阶段现已无任何日志逻辑）。
 
-    PopObj = PopAll.objs;
+    % 明确占位以兼容仍携带 verboseLog 的调用，避免未定义变量错误
+    verboseLog = false; %#ok<NASGU>
+    if ~isempty(varargin)
+        extra = varargin{1};
+        if islogical(extra) && isscalar(extra)
+            verboseLog = extra; %#ok<NASGU>
+        end
+    end
+
+    popMat = pop_matrix_view(PopAll);
+    PopObj = popMat.Y;
+    CV     = popMat.CV;
     [Ncand,M]  = size(PopObj);
     NV     = size(V,1);
     Ntar   = min(Ntar,Ncand);   % 不要超过候选总数
@@ -255,19 +271,18 @@ function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,curGen,nBase,
     PopObjShift = PopObj - repmat(min(PopObj,[],1),Ncand,1);
 
     % 约束违反度（可行优先）
-    if isempty(PopAll.cons)
-        CV = zeros(Ncand,1);
-    else
-        CV = sum(max(0,PopAll.cons),2);
-    end
+    CV = CV(:);
 
     % 参考向量最小夹角 gamma
-    cosineVV = 1 - pdist2(V,V,'cosine');
+    Vsafe    = add_min_norm_padding(V,1e-12);
+    cosineVV = 1 - pdist2(Vsafe,Vsafe,'cosine');
     cosineVV(1:size(cosineVV,1)+1:end) = 0;
     gamma = min(acos(max(-1,min(1,cosineVV))),[],2);
 
     % 关联到参考向量
-    Angle = acos(max(0,1 - pdist2(PopObjShift,V,'cosine'))); % 数值安全
+    PopObjShift = add_min_norm_padding(PopObjShift,1e-12);
+    Vsafe       = add_min_norm_padding(V,1e-12);
+    Angle       = acos(max(0,1 - pdist2(PopObjShift,Vsafe,'cosine'))); % 数值安全
     [~,associate] = min(Angle,[],2);
 
     % ---------- 第一步：每扇区先挑 1 个 ----------
@@ -350,6 +365,49 @@ function score = local_apd_score(idx,PopObjShift,Angle,associate,gamma,CV,M,thet
 end
 
 
+% ====== 以矩阵视角读取/兜底种群属性，贴合 PlatEMO INDIVIDUAL 接口 ======
+function popMat = pop_matrix_view(Pop)
+    Pop = Pop(:);
+    if isempty(Pop)
+        popMat.X = zeros(0,0);
+        popMat.Y = zeros(0,0);
+        popMat.CV = zeros(0,1);
+        popMat.feasible = false(0,1);
+        popMat.N = 0;
+        return;
+    end
+
+    popMat.X = Pop.decs;
+    popMat.Y = Pop.objs;
+
+    if isempty(Pop.cons)
+        popMat.CV = zeros(numel(Pop),1);
+    else
+        popMat.CV = sum(max(0,Pop.cons),2);
+    end
+
+    popMat.feasible = popMat.CV==0;
+    popMat.N = numel(Pop);
+end
+
+
+% ====== 防止近零向量触发 pdist2 的极小量级警告 ======
+function Xpad = add_min_norm_padding(X, eps_val)
+    Xpad  = X;
+    norms = sqrt(sum(X.^2,2));
+    tiny  = norms < eps_val;
+    if any(tiny)
+        Xpad(tiny,:) = Xpad(tiny,:) + eps_val;
+    end
+end
+
+
+% ====== 边界截断，统一遵循 PlatEMO 决策变量规范 ======
+function Xclip = clamp_to_bounds(X, lower, upper)
+    Xclip = min(max(X,lower),upper);
+end
+
+
 %% ======================= 参考向量缩放 =======================
 
 function V = ReferenceVectorAdaptation(PopObj,V0)
@@ -366,7 +424,8 @@ function Off = Operator_CPhase(Pop, nC, O_groups, S_groups, map, EVR_target, rk_
     if nC<=0
         Off = Pop.empty(); return;
     end
-    X = Pop.decs; Y = Pop.objs;
+    popMat = pop_matrix_view(Pop);
+    X = popMat.X; Y = popMat.Y;
     [N,~] = size(Y);
     D = size(X,2); %#ok<NASU>
 
@@ -419,7 +478,7 @@ function Off = Operator_CPhase(Pop, nC, O_groups, S_groups, map, EVR_target, rk_
 
         xCand      = X(i,:);
         xCand(Si)  = X(i,Si) + eta * dX;
-        xCand      = min(max(xCand,Problem.lower),Problem.upper);
+        xCand      = clamp_to_bounds(xCand,Problem.lower,Problem.upper);
         OffX(t,:)  = xCand;
     end
 
@@ -435,14 +494,25 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
         Off = Pop.empty();
         return;
     end
-    X = Pop.decs; Y = Pop.objs;
+    popMat = pop_matrix_view(Pop);
+    X = popMat.X; Y = popMat.Y; CV = popMat.CV;
     [N,M] = size(Y);
     D = size(X,2);
 
-    % 扇区归属（按平移后角度）
-    Y0 = Y - repmat(min(Y,[],1),N,1);
-    Angle = acos(max(0,1 - pdist2(Y0,V,'cosine')));
+    % 约束信息：优先在可行扇区采样；复用 PlatEMO 的锦标赛工具以保持接口一致
+    feasibleMask = CV==0;
+
+    % 扇区归属（按平移后角度），并预先算好每个个体的 APD 以便锦标赛使用
+    Y0     = Y - repmat(min(Y,[],1),N,1);
+    Y0     = add_min_norm_padding(Y0,1e-12);
+    Vsafe  = add_min_norm_padding(V,1e-12);
+    Angle  = acos(max(0,1 - pdist2(Y0,Vsafe,'cosine')));
     [~,sector] = min(Angle,[],2);
+    normY  = sqrt(sum(Y0.^2,2));
+    gammaS = gammaV(sector);
+    idxLin = sub2ind(size(Angle),(1:N)',sector);
+    apdRaw = (1+M*theta*(Angle(idxLin)./gammaS)).*normY;
+    apdAll = apdRaw + (1e6+CV).*~feasibleMask;
 
     Fd  = 0.90 - 0.40*theta; Fd = max(0.50,min(0.90,Fd));
     CRd = 0.60 + 0.30*theta; CRd = max(0.60,min(0.90,CRd));
@@ -450,22 +520,39 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
     OffX = zeros(nD,D);
 
     for t = 1:nD
-        % 1) 选一个扇区（按人口加权）
+        % 1) 选一个扇区（按可行数量加权，兜底为总数），并用锦标赛在该扇区内抽样父代
         sList = unique(sector)';
-        counts = arrayfun(@(s) sum(sector==s), sList);
-        s = randsample(sList,1,true,counts);
+        countsAll = arrayfun(@(s) sum(sector==s), sList);
+        countsFea = arrayfun(@(s) sum(sector==s & feasibleMask), sList);
+        weights   = countsAll;
+        if any(countsFea>0)
+            weights = countsFea;
+        end
+        s = randsample(sList,1,true,weights);
 
-        % 扇区内样本索引
-        idx = find(sector==s);
-        if numel(idx) < 3
-            idx = 1:N; % 兜底：全局抽
+        maskS = (sector==s);
+        if any(maskS)
+            fitLocal = apdAll;
+            fitLocal(~maskS) = inf; % 锦标赛只会在当前扇区内选择
+        else
+            fitLocal = apdAll; % 极端兜底：全局
         end
 
-        % 2) 目标个体 i 与父代 r1,r2,r3
-        i  = idx(randi(numel(idx)));
-        r1 = idx(randi(numel(idx)));
-        r2 = idx(randi(numel(idx)));
-        r3 = idx(randi(numel(idx)));
+        picks = TournamentSelection(2,4,fitLocal);
+        if numel(unique(picks)) < 4
+            % 锦标赛偶有重复时，补充随机可行索引，确保 DE/rand/1/bin 的 3 父不同
+            need = 4 - numel(picks);
+            pool = find(isfinite(fitLocal));
+            pool = setdiff(pool,picks,'stable');
+            pool = pool(randperm(numel(pool)));
+            fill = pool(1:min(need,numel(pool)));
+            picks = [picks, fill];
+            if numel(picks) < 4
+                picks = [picks, picks(randperm(numel(picks),4-numel(picks)))];
+            end
+            picks = picks(1:4);
+        end
+        i  = picks(1); r1 = picks(2); r2 = picks(3); r3 = picks(4);
 
         % 3) 目标空间 DE/rand/1/bin
         v  = Y(r1,:) + Fd*(Y(r2,:) - Y(r3,:));
@@ -486,7 +573,7 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
         xCand = X(i,:) + eta * dX;
 
         % 5) 边界修复
-        xCand = min(max(xCand,Problem.lower),Problem.upper);
+        xCand = clamp_to_bounds(xCand,Problem.lower,Problem.upper);
         OffX(t,:) = xCand;
     end
 
