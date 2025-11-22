@@ -326,6 +326,18 @@ function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,N
         selIdx = [selIdx, extra];
     end
 
+    if verboseLog
+        sb = sum(selIdx <= nBase);
+        sc = sum(selIdx >  nBase        & selIdx <= nBase+nC);
+        sd = sum(selIdx >  nBase+nC);
+
+        feasSel = sum(CV(selIdx) == 0);
+        feasAll = sum(CV == 0);
+
+        fprintf('[BAX_ENV][g%04d] t=%4.3f N=%d/%d | c=%d/%d/%d | s=%d/%d/%d | u=%d/%d\n', ...
+                curGen, theta, numel(selIdx), Ntar, nBase, nC, nD, sb, sc, sd, feasSel, feasAll);
+    end
+
     Population = PopAll(selIdx);
 end
 
