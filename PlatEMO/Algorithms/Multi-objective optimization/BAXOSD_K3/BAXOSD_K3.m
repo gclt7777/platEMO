@@ -36,10 +36,11 @@ classdef BAXOSD_K3 < ALGORITHM
             gammaV = min(acos(max(-1,min(1,cosineVV))),[],2); 
 
             % 初始线性映射 T（z-score 域）
-            map = fit_T_linear_zscore(Population.objs, Population.decs, kappa_tar);
+            popMat = pop_matrix_view(Population);
+            map = fit_T_linear_zscore(popMat.Y, popMat.X, kappa_tar);
 
             % 初始 O-S-D 分组（g = 1）
-            [O_groups,K] = group_objectives_angle(Population.objs, Problem.M); %#ok<ASGLU>
+            [O_groups,K] = group_objectives_angle(popMat.Y, Problem.M); %#ok<ASGLU>
             S_groups     = design_S_AP_balanced(map.T, O_groups, rhoA);
             curGen       = 1;
 
@@ -61,11 +62,13 @@ classdef BAXOSD_K3 < ALGORITHM
                 end
 
                 % ------- 每代拟合线性映射 T（z-score 域） -------
-                map = fit_T_linear_zscore(Population.objs, Population.decs, kappa_tar);
+                popMat = pop_matrix_view(Population);
+                map = fit_T_linear_zscore(popMat.Y, popMat.X, kappa_tar);
 
                 % ------- 周期性重分组与唯一指派（从第 2 代开始） -------
                 if curGen > 1 && mod(curGen-1,periodGroup)==0
-                    [O_groups,K] = group_objectives_angle(Population.objs, Problem.M); %#ok<ASGLU>
+                    popMat = pop_matrix_view(Population);
+                    [O_groups,K] = group_objectives_angle(popMat.Y, Problem.M); %#ok<ASGLU>
                     S_groups     = design_S_AP_balanced(map.T, O_groups, rhoA);
                 end
 
@@ -257,7 +260,9 @@ function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,N
         end
     end
 
-    PopObj = PopAll.objs;
+    popMat = pop_matrix_view(PopAll);
+    PopObj = popMat.Y;
+    CV     = popMat.CV;
     [Ncand,M]  = size(PopObj);
     NV     = size(V,1);
     Ntar   = min(Ntar,Ncand);   % 不要超过候选总数
@@ -266,11 +271,7 @@ function Population = EnvironmentalSelection_BAXOSD(PopAll,V,theta,nBase,nC,nD,N
     PopObjShift = PopObj - repmat(min(PopObj,[],1),Ncand,1);
 
     % 约束违反度（可行优先）
-    if isempty(PopAll.cons)
-        CV = zeros(Ncand,1);
-    else
-        CV = sum(max(0,PopAll.cons),2);
-    end
+    CV = CV(:);
 
     % 参考向量最小夹角 gamma
     Vsafe    = add_min_norm_padding(V,1e-12);
@@ -376,6 +377,32 @@ function score = local_apd_score(idx,PopObjShift,Angle,associate,gamma,CV,M,thet
 end
 
 
+% ====== 以矩阵视角读取/兜底种群属性，贴合 PlatEMO INDIVIDUAL 接口 ======
+function popMat = pop_matrix_view(Pop)
+    Pop = Pop(:);
+    if isempty(Pop)
+        popMat.X = zeros(0,0);
+        popMat.Y = zeros(0,0);
+        popMat.CV = zeros(0,1);
+        popMat.feasible = false(0,1);
+        popMat.N = 0;
+        return;
+    end
+
+    popMat.X = Pop.decs;
+    popMat.Y = Pop.objs;
+
+    if isempty(Pop.cons)
+        popMat.CV = zeros(numel(Pop),1);
+    else
+        popMat.CV = sum(max(0,Pop.cons),2);
+    end
+
+    popMat.feasible = popMat.CV==0;
+    popMat.N = numel(Pop);
+end
+
+
 % ====== 防止近零向量触发 pdist2 的极小量级警告 ======
 function Xpad = add_min_norm_padding(X, eps_val)
     Xpad  = X;
@@ -384,6 +411,12 @@ function Xpad = add_min_norm_padding(X, eps_val)
     if any(tiny)
         Xpad(tiny,:) = Xpad(tiny,:) + eps_val;
     end
+end
+
+
+% ====== 边界截断，统一遵循 PlatEMO 决策变量规范 ======
+function Xclip = clamp_to_bounds(X, lower, upper)
+    Xclip = min(max(X,lower),upper);
 end
 
 
@@ -403,7 +436,8 @@ function Off = Operator_CPhase(Pop, nC, O_groups, S_groups, map, EVR_target, rk_
     if nC<=0
         Off = Pop.empty(); return;
     end
-    X = Pop.decs; Y = Pop.objs;
+    popMat = pop_matrix_view(Pop);
+    X = popMat.X; Y = popMat.Y;
     [N,~] = size(Y);
     D = size(X,2); %#ok<NASU>
 
@@ -456,7 +490,7 @@ function Off = Operator_CPhase(Pop, nC, O_groups, S_groups, map, EVR_target, rk_
 
         xCand      = X(i,:);
         xCand(Si)  = X(i,Si) + eta * dX;
-        xCand      = min(max(xCand,Problem.lower),Problem.upper);
+        xCand      = clamp_to_bounds(xCand,Problem.lower,Problem.upper);
         OffX(t,:)  = xCand;
     end
 
@@ -472,16 +506,12 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
         Off = Pop.empty();
         return;
     end
-    X = Pop.decs; Y = Pop.objs;
+    popMat = pop_matrix_view(Pop);
+    X = popMat.X; Y = popMat.Y; CV = popMat.CV;
     [N,M] = size(Y);
     D = size(X,2);
 
     % 约束信息：优先在可行扇区采样；复用 PlatEMO 的锦标赛工具以保持接口一致
-    if isempty(Pop.cons)
-        CV = zeros(N,1);
-    else
-        CV = sum(max(0,Pop.cons),2);
-    end
     feasibleMask = CV==0;
 
     % 扇区归属（按平移后角度），并预先算好每个个体的 APD 以便锦标赛使用
@@ -555,7 +585,7 @@ function Off = Operator_DPhase(Pop, nD, V, gammaV, map, theta, eta, Problem) %#o
         xCand = X(i,:) + eta * dX;
 
         % 5) 边界修复
-        xCand = min(max(xCand,Problem.lower),Problem.upper);
+        xCand = clamp_to_bounds(xCand,Problem.lower,Problem.upper);
         OffX(t,:) = xCand;
     end
 
