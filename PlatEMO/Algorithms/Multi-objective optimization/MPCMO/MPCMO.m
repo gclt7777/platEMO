@@ -1,99 +1,92 @@
-function MPCMO(Global)
-% <algorithm> <M>
-%MPCMO Multi-population co-evolution for many-objective optimization.
-%
-%   This implementation follows the idea of multi-population co-evolution
-%   (MPCMO) where the population is partitioned into several subpopulations
-%   that evolve semi-independently. Each subpopulation applies a standard
-%   NSGA-II style reproduction and survivor selection while periodic
-%   migration exchanges elite individuals between neighbouring subgroups.
-%   Optional global rebalancing can regroup individuals to maintain the
-%   overall Pareto front quality.
-%
-% <algorithm> <M>
-%
+classdef MPCMO < ALGORITHM
+% <many> <real/integer/binary/permutation> <constrained/none>
+% Multi-population co-evolutionary algorithm for MaOPs
+
 %------------------------------- Reference --------------------------------
-% C. He, Q. Zhang, Y. Tian, and J. Xiao, A Multi-Population Co-evolutionary
-% Evolutionary Algorithm for Many-Objective Optimization, IEEE Transactions
+% C. He, Q. Zhang, Y. Tian, and J. Xiao, A multi-population co-evolutionary
+% evolutionary algorithm for many-objective optimization. IEEE Transactions
 % on Evolutionary Computation, 2018, 22(2): 224-239.
 %--------------------------------------------------------------------------
 
-    %% Parameter setting
-    [numGroups,migrationPeriod,migrationFraction,refMode,globalSelectPeriod] = ...
-        Global.ParameterSet(5,5,0.2,1,0);
+    methods
+        function main(Algorithm,Problem)
+            %% Parameter setting
+            [numGroups,migrationPeriod,migrationFraction,refMode,globalSelectPeriod] = ...
+                Algorithm.ParameterSet(5,5,0.2,1,0);
 
-    numGroups          = max(1,round(numGroups));
-    migrationPeriod    = max(0,round(migrationPeriod));
-    migrationFraction  = max(0,migrationFraction);
-    refMode            = refMode > 0;
-    globalSelectPeriod = max(0,round(globalSelectPeriod));
+            numGroups          = max(1,round(numGroups));
+            migrationPeriod    = max(0,round(migrationPeriod));
+            migrationFraction  = max(0,migrationFraction);
+            refMode            = refMode > 0;
+            globalSelectPeriod = max(0,round(globalSelectPeriod));
 
-    %% Initial population and subpopulation setup
-    Population = Global.Initialization();
-    totalSize  = length(Population);
-    if totalSize == 0
-        return;
-    end
+            %% Initialise population and subpopulations
+            Population = Problem.Initialization();
+            totalSize  = numel(Population);
+            if totalSize == 0
+                return;
+            end
 
-    numGroups = min(numGroups,totalSize);
-    while numGroups > 1 && totalSize/numGroups < 2
-        numGroups = numGroups - 1;
-    end
+            numGroups = min(numGroups,totalSize);
+            while numGroups > 1 && totalSize/numGroups < 2
+                numGroups = numGroups - 1;
+            end
 
-    [SubPops,subSizes,RefVectors] = InitialiseSubpopulations(Population,numGroups,refMode,Global);
-    Population = CombineSubpopulations(SubPops);
-
-    generation = 0;
-
-    %% Optimization loop
-    while Global.NotTermination(Population)
-        generation = generation + 1;
-
-        % Evolve each subpopulation independently
-        for g = 1 : numGroups
-            SubPops{g} = EvolveSubpopulation(SubPops{g},subSizes(g));
-        end
-
-        % Periodic migration between neighbouring subpopulations
-        if migrationFraction > 0 && migrationPeriod > 0 && mod(generation,migrationPeriod) == 0
-            SubPops = PerformMigration(SubPops,subSizes,migrationFraction);
-        end
-
-        Population = CombineSubpopulations(SubPops);
-
-        % Optional global environmental selection and redistribution
-        if globalSelectPeriod > 0 && mod(generation,globalSelectPeriod) == 0
-            [Population,~,~] = NSGAIIEnvironmentalSelection(Population,Global.N);
-            [SubPops,RefVectors] = RedistributeSubpopulations(Population,subSizes,refMode,RefVectors,Global);
+            [SubPops,subSizes,RefVectors] = InitialiseSubpopulations(Population,numGroups,refMode,Problem);
             Population = CombineSubpopulations(SubPops);
+
+            generation = 0;
+
+            %% Optimization loop
+            while Algorithm.NotTerminated(Population)
+                generation = generation + 1;
+
+                % Evolve each subpopulation independently
+                for g = 1:numGroups
+                    SubPops{g} = EvolveSubpopulation(Problem,SubPops{g},subSizes(g));
+                end
+
+                % Periodic migration between neighbouring subpopulations
+                if migrationFraction > 0 && migrationPeriod > 0 && mod(generation,migrationPeriod) == 0
+                    SubPops = PerformMigration(SubPops,subSizes,migrationFraction,Problem);
+                end
+
+                Population = CombineSubpopulations(SubPops);
+
+                % Optional global environmental selection and redistribution
+                if globalSelectPeriod > 0 && mod(generation,globalSelectPeriod) == 0
+                    [Population,~,~] = NSGAIIEnvironmentalSelection(Population,Problem.N);
+                    [SubPops,RefVectors] = RedistributeSubpopulations(Population,subSizes,refMode,RefVectors,Problem);
+                    Population = CombineSubpopulations(SubPops);
+                end
+            end
         end
     end
 end
 
-function SubPop = EvolveSubpopulation(SubPop,targetSize)
-%Evolve a single subpopulation using GA reproduction and NSGA-II selection.
+function SubPop = EvolveSubpopulation(Problem,SubPop,targetSize)
+% Evolve a single subpopulation using GA reproduction and NSGA-II selection.
 
     if isempty(SubPop)
-        SubPop = INDIVIDUAL.empty;
         return;
     end
 
-    subSize = length(SubPop);
+    subSize = numel(SubPop);
     [FrontNo,~] = NDSort(SubPop.objs,SubPop.cons,subSize);
     CrowdDis    = CrowdingDistance(SubPop.objs,FrontNo);
 
     if subSize > 1
         MatingPool = TournamentSelection(2,2*subSize,FrontNo,-CrowdDis);
-        Offspring  = GA(SubPop(MatingPool));
+        Offspring  = OperatorGA(Problem,SubPop(MatingPool));
     else
-        Offspring = GA(repmat(SubPop,1,2));
+        Offspring  = OperatorGA(Problem,repmat(SubPop,1,2));
     end
 
     SubPop = NSGAIIEnvironmentalSelection([SubPop,Offspring],targetSize);
 end
 
-function SubPops = PerformMigration(SubPops,subSizes,migrationFraction)
-%Perform ring migration by sending elite individuals to the next subpopulation.
+function SubPops = PerformMigration(SubPops,subSizes,migrationFraction,Problem)
+% Perform ring migration by sending elite individuals to the next group.
 
     numGroups = numel(SubPops);
     if numGroups <= 1
@@ -101,17 +94,17 @@ function SubPops = PerformMigration(SubPops,subSizes,migrationFraction)
     end
 
     migrants = cell(1,numGroups);
-    for g = 1 : numGroups
-        subSize = length(SubPops{g});
+    for g = 1:numGroups
+        subSize = numel(SubPops{g});
         if subSize == 0
-            migrants{g} = INDIVIDUAL.empty;
+            migrants{g} = SOLUTION.empty;
             continue;
         end
         count = min(subSize,max(1,round(migrationFraction*subSizes(g))));
         migrants{g} = SelectMigrants(SubPops{g},count);
     end
 
-    for g = 1 : numGroups
+    for g = 1:numGroups
         target = mod(g,numGroups) + 1;
         if isempty(migrants{g})
             continue;
@@ -119,23 +112,26 @@ function SubPops = PerformMigration(SubPops,subSizes,migrationFraction)
         SubPops{target} = [SubPops{target},migrants{g}];
     end
 
-    for g = 1 : numGroups
+    for g = 1:numGroups
         desired = subSizes(g);
-        if length(SubPops{g}) > desired
+        if numel(SubPops{g}) > desired
             SubPops{g} = NSGAIIEnvironmentalSelection(SubPops{g},desired);
+        elseif numel(SubPops{g}) < desired
+            filler = randi(max(1,numel(SubPops{g})),1,desired-numel(SubPops{g}));
+            SubPops{g} = [SubPops{g},Problem.Evaluation(SubPops{g}(filler).decs)]; %#ok<AGROW>
         end
     end
 end
 
 function migrants = SelectMigrants(SubPop,count)
-%Select elite individuals within a subpopulation for migration.
+% Select elite individuals within a subpopulation for migration.
 
     if count <= 0 || isempty(SubPop)
-        migrants = INDIVIDUAL.empty;
+        migrants = SOLUTION.empty;
         return;
     end
 
-    subSize = length(SubPop);
+    subSize = numel(SubPop);
     [FrontNo,~] = NDSort(SubPop.objs,SubPop.cons,subSize);
     CrowdDis    = CrowdingDistance(SubPop.objs,FrontNo);
 
@@ -145,17 +141,17 @@ function migrants = SelectMigrants(SubPop,count)
     migrants = SubPop(selected);
 end
 
-function [SubPops,subSizes,RefVectors] = InitialiseSubpopulations(Population,numGroups,refMode,Global)
-%Create the initial set of subpopulations based on reference vectors or random splits.
+function [SubPops,subSizes,RefVectors] = InitialiseSubpopulations(Population,numGroups,refMode,Problem)
+% Create the initial set of subpopulations based on reference vectors or random splits.
 
-    totalSize = length(Population);
+    totalSize = numel(Population);
     baseSize  = floor(totalSize/numGroups);
     subSizes  = baseSize*ones(1,numGroups);
     remainder = totalSize - baseSize*numGroups;
     subSizes(1:remainder) = subSizes(1:remainder) + 1;
 
     if refMode
-        [RefVectors,~] = UniformPoint(numGroups,Global.M);
+        [RefVectors,~] = UniformPoint(numGroups,Problem.M);
         RefVectors = NormaliseVectors(RefVectors);
         association = AssociateToReferences(Population.objs,RefVectors);
     else
@@ -166,7 +162,7 @@ function [SubPops,subSizes,RefVectors] = InitialiseSubpopulations(Population,num
     assigned = false(totalSize,1);
     SubPops  = cell(1,numGroups);
 
-    for g = 1 : numGroups
+    for g = 1:numGroups
         need = subSizes(g);
         if refMode
             cand = find(association == g & ~assigned);
@@ -174,7 +170,7 @@ function [SubPops,subSizes,RefVectors] = InitialiseSubpopulations(Population,num
             cand = find(~assigned);
         end
         if isempty(cand)
-            SubPops{g} = INDIVIDUAL.empty;
+            SubPops{g} = SOLUTION.empty;
             continue;
         end
         take = min(need,numel(cand));
@@ -187,8 +183,8 @@ function [SubPops,subSizes,RefVectors] = InitialiseSubpopulations(Population,num
     if ~isempty(remaining)
         remaining = remaining(randperm(numel(remaining)));
         ptr = 1;
-        for g = 1 : numGroups
-            need = subSizes(g) - length(SubPops{g});
+        for g = 1:numGroups
+            need = subSizes(g) - numel(SubPops{g});
             if need <= 0
                 continue;
             end
@@ -202,36 +198,36 @@ function [SubPops,subSizes,RefVectors] = InitialiseSubpopulations(Population,num
         end
     end
 
-    for g = 1 : numGroups
-        if length(SubPops{g}) < subSizes(g)
-            deficit = subSizes(g) - length(SubPops{g});
+    for g = 1:numGroups
+        if numel(SubPops{g}) < subSizes(g)
+            deficit = subSizes(g) - numel(SubPops{g});
             filler  = randperm(totalSize,deficit);
             SubPops{g} = [SubPops{g},Population(filler)]; %#ok<AGROW>
-        elseif length(SubPops{g}) > subSizes(g)
+        elseif numel(SubPops{g}) > subSizes(g)
             SubPops{g} = SubPops{g}(1:subSizes(g));
         end
     end
 end
 
-function [SubPops,RefVectors] = RedistributeSubpopulations(Population,subSizes,refMode,RefVectors,Global)
-%Redistribute individuals into subpopulations after global selection.
+function [SubPops,RefVectors] = RedistributeSubpopulations(Population,subSizes,refMode,RefVectors,Problem)
+% Redistribute individuals into subpopulations after global selection.
 
     numGroups = numel(subSizes);
     if refMode && (isempty(RefVectors) || size(RefVectors,1) ~= numGroups)
-        [RefVectors,~] = UniformPoint(numGroups,Global.M);
+        [RefVectors,~] = UniformPoint(numGroups,Problem.M);
         RefVectors = NormaliseVectors(RefVectors);
     end
 
     if refMode
         association = AssociateToReferences(Population.objs,RefVectors);
     else
-        association = ones(length(Population),1);
+        association = ones(numel(Population),1);
     end
 
-    assigned = false(length(Population),1);
+    assigned = false(numel(Population),1);
     SubPops  = cell(1,numGroups);
 
-    for g = 1 : numGroups
+    for g = 1:numGroups
         need = subSizes(g);
         if refMode
             cand = find(association == g & ~assigned);
@@ -244,7 +240,7 @@ function [SubPops,RefVectors] = RedistributeSubpopulations(Population,subSizes,r
             SubPops{g} = Population(idx);
             assigned(idx) = true;
         else
-            SubPops{g} = INDIVIDUAL.empty;
+            SubPops{g} = SOLUTION.empty;
         end
     end
 
@@ -252,8 +248,8 @@ function [SubPops,RefVectors] = RedistributeSubpopulations(Population,subSizes,r
     if ~isempty(remaining)
         remaining = remaining(randperm(numel(remaining)));
         ptr = 1;
-        for g = 1 : numGroups
-            need = subSizes(g) - length(SubPops{g});
+        for g = 1:numGroups
+            need = subSizes(g) - numel(SubPops{g});
             if need <= 0
                 continue;
             end
@@ -267,29 +263,29 @@ function [SubPops,RefVectors] = RedistributeSubpopulations(Population,subSizes,r
         end
     end
 
-    for g = 1 : numGroups
-        if length(SubPops{g}) < subSizes(g)
-            deficit = subSizes(g) - length(SubPops{g});
-            filler  = randperm(length(Population),deficit);
+    for g = 1:numGroups
+        if numel(SubPops{g}) < subSizes(g)
+            deficit = subSizes(g) - numel(SubPops{g});
+            filler  = randperm(numel(Population),deficit);
             SubPops{g} = [SubPops{g},Population(filler)]; %#ok<AGROW>
-        elseif length(SubPops{g}) > subSizes(g)
+        elseif numel(SubPops{g}) > subSizes(g)
             SubPops{g} = SubPops{g}(1:subSizes(g));
         end
     end
 end
 
 function Population = CombineSubpopulations(SubPops)
-%Combine all subpopulations into a single population array.
+% Combine all subpopulations into a single population array.
 
     if isempty(SubPops)
-        Population = INDIVIDUAL.empty;
+        Population = SOLUTION.empty;
     else
         Population = [SubPops{:}];
     end
 end
 
 function [Population,FrontNo,CrowdDis] = NSGAIIEnvironmentalSelection(Population,N)
-%Local copy of NSGA-II environmental selection to avoid name conflicts.
+% Local copy of NSGA-II environmental selection to avoid name conflicts.
 
     [FrontNo,MaxFNo] = NDSort(Population.objs,Population.cons,N);
     Next = FrontNo < MaxFNo;
@@ -299,7 +295,7 @@ function [Population,FrontNo,CrowdDis] = NSGAIIEnvironmentalSelection(Population
     Last = find(FrontNo == MaxFNo);
     if ~isempty(Last)
         [~,Rank] = sort(CrowdDis(Last),'descend');
-        picks = min(length(Last), max(0, N - sum(Next)));
+        picks = min(numel(Last), max(0, N - sum(Next)));
         if picks > 0
             Next(Last(Rank(1:picks))) = true;
         end
@@ -311,7 +307,7 @@ function [Population,FrontNo,CrowdDis] = NSGAIIEnvironmentalSelection(Population
 end
 
 function CrowdDis = CrowdingDistance(PopObj,FrontNo)
-%Calculate the crowding distance of each solution in all fronts.
+% Calculate the crowding distance of each solution in all fronts.
 
     [N,M]    = size(PopObj);
     CrowdDis = zeros(1,N);
@@ -340,7 +336,7 @@ function CrowdDis = CrowdingDistance(PopObj,FrontNo)
 end
 
 function [association,angles] = AssociateToReferences(PopObj,RefVectors)
-%Associate each solution with the closest reference vector by angle.
+% Associate each solution with the closest reference vector by angle.
 
     if isempty(PopObj)
         association = zeros(0,1);
@@ -367,7 +363,7 @@ function [association,angles] = AssociateToReferences(PopObj,RefVectors)
 end
 
 function RefVectors = NormaliseVectors(RefVectors)
-%Normalise reference vectors to unit length.
+% Normalise reference vectors to unit length.
 
     if isempty(RefVectors)
         return;

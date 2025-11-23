@@ -1,67 +1,55 @@
-function PHLMEA(Global)
-% <algorithm> <M>
-%PHLMEA Population-Hierarchical Learning-based EA for large-scale MaOO.
-%
-%   This implementation follows the description of the population
-%   hierarchical-based evolutionary algorithm (PH-LMEA). The population is
-%   partitioned into two layers according to fitness quality, while an
-%   external archive keeps elite solutions that guide both exploitation and
-%   exploration. Low-fitness layers learn from both the archive and the
-%   high-fitness layer, whereas the high-fitness layer mainly learns from
-%   the archive. Environmental selection is performed through objective-space
-%   clustering to maintain diversity among the survivors. An optional
-%   variable screening module estimates active decision variables from the
-%   current population and archive to focus the search on influential
-%   dimensions in ultra-high dimensional problems.
-%
-% <algorithm> <L>
-%
+classdef PHLMEA < ALGORITHM
+% <large/real/integer/binary> <many> <constrained/none>
+% Population-hierarchical learning based EA for large-scale MaOPs
+
 %------------------------------- Reference --------------------------------
 % X. Zhang, Y. Tian, R. Cheng, and Y. Jin, A decision variable clustering
-% based evolutionary algorithm for large-scale many-objective optimization,
+% based evolutionary algorithm for large-scale many-objective optimization.
 % IEEE Transactions on Evolutionary Computation, 2018, 22(1): 97-112.
-%
 % L. Zhao, Y. Tian, R. Cheng, and X. Zhang, A population hierarchical-based
-% evolutionary algorithm for large-scale many-objective optimization,
+% evolutionary algorithm for large-scale many-objective optimization.
 % Information Sciences, 2021, 569: 84-110.
 %--------------------------------------------------------------------------
 
-    %% Parameter setting
-    [ratioLow,archiveFactor,clusterAlpha,varFreq,varKeep] = ...
-        Global.ParameterSet(0.5,1.5,1.0,0,0.3);
+    methods
+        function main(Algorithm,Problem)
+            %% Parameter setting
+            [ratioLow,archiveFactor,clusterAlpha,varFreq,varKeep] = ...
+                Algorithm.ParameterSet(0.5,1.5,1.0,0,0.3);
 
-    %% Initial population and archive
-    Population = Global.Initialization();
-    archiveSize = max(Global.N, round(archiveFactor*Global.N));
+            %% Initial population and archive
+            Population = Problem.Initialization();
+            archiveSize = max(Problem.N, round(archiveFactor*Problem.N));
 
-    [P_low,P_high] = SplitPopulationLayers(Population,ratioLow);
-    Archive       = UpdateArchive(Population,INDIVIDUAL.empty,archiveSize);
+            [P_low,P_high] = SplitPopulationLayers(Population,ratioLow);
+            Archive       = UpdateArchive(Population,SOLUTION.empty,archiveSize);
 
-    activeIndex = 1:Global.D;
-    generation  = 0;
+            activeIndex = 1:Problem.D;
+            generation  = 0;
 
-    %% Optimization loop
-    while Global.NotTermination(Population)
-        generation = generation + 1;
+            %% Optimization loop
+            while Algorithm.NotTerminated(Population)
+                generation = generation + 1;
 
-        Off_low  = ReproduceLowLayer(P_low,Archive,P_high,Global,activeIndex);
-        Off_high = ReproduceHighLayer(P_high,Archive,Global,activeIndex);
+                Off_low  = ReproduceLowLayer(P_low,Archive,P_high,Problem,activeIndex);
+                Off_high = ReproduceHighLayer(P_high,Archive,Problem,activeIndex);
 
-        Union = [Population,Off_low,Off_high,Archive];
-        Population = ClusteredEnvironmentalSelection(Union,Global.N,clusterAlpha);
+                Union = [Population,Off_low,Off_high,Archive];
+                Population = ClusteredEnvironmentalSelection(Union,Problem.N,clusterAlpha);
 
-        [P_low,P_high] = SplitPopulationLayers(Population,ratioLow);
-        Archive        = UpdateArchive(Population,Archive,archiveSize);
+                [P_low,P_high] = SplitPopulationLayers(Population,ratioLow);
+                Archive        = UpdateArchive(Population,Archive,archiveSize);
 
-        if varFreq > 0 && mod(generation,varFreq) == 0
-            activeIndex = IdentifyActiveVariables([Population,Archive],Global,varKeep);
+                if varFreq > 0 && mod(generation,varFreq) == 0
+                    activeIndex = IdentifyActiveVariables([Population,Archive],Problem,varKeep);
+                end
+            end
         end
     end
 end
 
 function [P_low,P_high] = SplitPopulationLayers(Population,ratioLow)
-% Split the population into low- and high-fitness layers based on rank and
-% crowding distance.
+% Split the population into low- and high-fitness layers based on rank and crowding distance.
 
     if isempty(Population)
         P_low  = Population;
@@ -69,19 +57,19 @@ function [P_low,P_high] = SplitPopulationLayers(Population,ratioLow)
         return;
     end
 
-    PopObj = Population.objs;
+    PopObj  = Population.objs;
     PopCons = Population.cons;
     if isempty(PopCons)
         PopCons = [];
     end
 
-    [FrontNo,~] = NDSort(PopObj,PopCons,length(Population));
+    [FrontNo,~] = NDSort(PopObj,PopCons,numel(Population));
     CrowdDis    = CrowdingDistance(PopObj,FrontNo);
 
     scores = [FrontNo',-CrowdDis'];
     [~,order] = sortrows(scores,[1 2]);
 
-    cutPoint = max(1,min(length(Population),round(ratioLow*length(Population))));
+    cutPoint = max(1,min(numel(Population),round(ratioLow*numel(Population))));
     P_low    = Population(order(1:cutPoint));
     P_high   = Population(order(cutPoint+1:end));
 end
@@ -96,19 +84,18 @@ function Archive = UpdateArchive(Population,Archive,maxArchive)
     end
 
     Decs = cat(1,Combined.decs);
-    % Remove duplicates based on decision vectors (tolerant rounding)
     DecsRounded = round(Decs,8);
     [~,uniqueIdx] = unique(DecsRounded,'rows','stable');
     Combined = Combined(uniqueIdx);
 
-    PopObj = Combined.objs;
+    PopObj  = Combined.objs;
     PopCons = Combined.cons;
     if isempty(PopCons)
         PopCons = [];
     end
 
     [FrontNo,MaxFront] = NDSort(PopObj,PopCons,maxArchive);
-    Next = FrontNo < MaxFront;
+    Next    = FrontNo < MaxFront;
     Archive = Combined(Next);
 
     Last  = find(FrontNo == MaxFront);
@@ -116,7 +103,7 @@ function Archive = UpdateArchive(Population,Archive,maxArchive)
     if picks > 0 && ~isempty(Last)
         CrowdDis = CrowdingDistance(PopObj,FrontNo);
         [~,rank] = sort(CrowdDis(Last),'descend');
-        picks    = min(picks,length(rank));
+        picks    = min(picks,numel(rank));
         Archive  = [Archive,Combined(Last(rank(1:picks)))];
     end
 end
@@ -128,7 +115,7 @@ function Population = ClusteredEnvironmentalSelection(Population,N,clusterAlpha)
         return;
     end
 
-    PopObj = Population.objs;
+    PopObj  = Population.objs;
     PopCons = Population.cons;
     if isempty(PopCons)
         PopCons = [];
@@ -137,17 +124,16 @@ function Population = ClusteredEnvironmentalSelection(Population,N,clusterAlpha)
     [FrontNo,MaxFront] = NDSort(PopObj,PopCons,N);
     Next = FrontNo < MaxFront;
 
-    % Prepare candidates from the last admissible front
-    Last = find(FrontNo == MaxFront);
-    Remain = N - sum(Next);
-    Selected = false(1,length(Population));
+    Last     = find(FrontNo == MaxFront);
+    Remain   = N - sum(Next);
+    Selected = false(1,numel(Population));
     Selected(Next) = true;
 
     if Remain > 0 && ~isempty(Last)
         frontObj = PopObj(Last,:);
         normObj  = NormaliseObjectives(frontObj);
 
-        clusterCount = max(1,min(length(Last),round(clusterAlpha*size(frontObj,2))));
+        clusterCount = max(1,min(numel(Last),round(clusterAlpha*size(frontObj,2))));
         clusterCount = min(clusterCount,Remain);
 
         chosen = ClusterSelect(normObj,clusterCount,Remain);
@@ -157,7 +143,7 @@ function Population = ClusteredEnvironmentalSelection(Population,N,clusterAlpha)
     Population = Population(Selected);
 end
 
-function Offspring = ReproduceLowLayer(P_low,Archive,P_high,Global,activeIndex)
+function Offspring = ReproduceLowLayer(P_low,Archive,P_high,Problem,activeIndex)
 % Reproduction for the low-fitness layer guided by archive and high layer.
 
     if isempty(P_low)
@@ -165,11 +151,11 @@ function Offspring = ReproduceLowLayer(P_low,Archive,P_high,Global,activeIndex)
         return;
     end
 
-    n = length(P_low);
+    n = numel(P_low);
     OffDec = cat(1,P_low.decs);
     base   = OffDec;
-    lower  = repmat(Global.lower,n,1);
-    upper  = repmat(Global.upper,n,1);
+    lower  = repmat(Problem.lower,n,1);
+    upper  = repmat(Problem.upper,n,1);
 
     ArchDec = [];
     if ~isempty(Archive)
@@ -196,11 +182,11 @@ function Offspring = ReproduceLowLayer(P_low,Archive,P_high,Global,activeIndex)
         CR = 0.5 + rand*0.5;
         mutant = a + F*(learn - diff);
 
-        crossMask = rand(1,Global.D) < CR;
+        crossMask = rand(1,Problem.D) < CR;
         if ~isempty(activeIndex)
-            crossMask(activeIndex(randi(length(activeIndex)))) = true;
+            crossMask(activeIndex(randi(numel(activeIndex)))) = true;
         else
-            crossMask(randi(Global.D)) = true;
+            crossMask(randi(Problem.D)) = true;
         end
 
         trial = a;
@@ -209,10 +195,10 @@ function Offspring = ReproduceLowLayer(P_low,Archive,P_high,Global,activeIndex)
     end
 
     OffDec = min(max(OffDec,lower),upper);
-    Offspring = INDIVIDUAL(OffDec);
+    Offspring = Problem.Evaluation(OffDec);
 end
 
-function Offspring = ReproduceHighLayer(P_high,Archive,Global,activeIndex)
+function Offspring = ReproduceHighLayer(P_high,Archive,Problem,activeIndex)
 % Reproduction for the high-fitness layer focusing on archive exploitation.
 
     if isempty(P_high)
@@ -220,11 +206,11 @@ function Offspring = ReproduceHighLayer(P_high,Archive,Global,activeIndex)
         return;
     end
 
-    n = length(P_high);
+    n = numel(P_high);
     OffDec = cat(1,P_high.decs);
     base   = OffDec;
-    lower  = repmat(Global.lower,n,1);
-    upper  = repmat(Global.upper,n,1);
+    lower  = repmat(Problem.lower,n,1);
+    upper  = repmat(Problem.upper,n,1);
 
     if isempty(Archive)
         ArchDec = base;
@@ -247,11 +233,11 @@ function Offspring = ReproduceHighLayer(P_high,Archive,Global,activeIndex)
         CR = 0.6 + rand*0.3;
         mutant = a + F*(learn1 - learn2);
 
-        crossMask = rand(1,Global.D) < CR;
+        crossMask = rand(1,Problem.D) < CR;
         if ~isempty(activeIndex)
-            crossMask(activeIndex(randi(length(activeIndex)))) = true;
+            crossMask(activeIndex(randi(numel(activeIndex)))) = true;
         else
-            crossMask(randi(Global.D)) = true;
+            crossMask(randi(Problem.D)) = true;
         end
 
         trial = a;
@@ -260,24 +246,24 @@ function Offspring = ReproduceHighLayer(P_high,Archive,Global,activeIndex)
     end
 
     OffDec = min(max(OffDec,lower),upper);
-    Offspring = INDIVIDUAL(OffDec);
+    Offspring = Problem.Evaluation(OffDec);
 end
 
-function activeIndex = IdentifyActiveVariables(Individuals,Global,keepRatio)
+function activeIndex = IdentifyActiveVariables(Individuals,Problem,keepRatio)
 % Estimate active decision variables using normalised standard deviation.
 
     if isempty(Individuals)
-        activeIndex = 1:Global.D;
+        activeIndex = 1:Problem.D;
         return;
     end
 
     Decs = cat(1,Individuals.decs);
     sigma = std(Decs,0,1);
-    span  = Global.upper - Global.lower;
+    span  = Problem.upper - Problem.lower;
     span(span == 0) = 1;
     contribution = sigma ./ span;
 
-    activeCount = max(1,round(keepRatio*Global.D));
+    activeCount = max(1,round(keepRatio*Problem.D));
     [~,order] = sort(contribution,'descend');
     activeIndex = order(1:activeCount);
 end
@@ -301,7 +287,6 @@ function chosen = ClusterSelect(normObj,clusterCount,remain)
         return;
     end
 
-    % Greedy selection of cluster centers (farthest-point strategy)
     scores = sum(normObj,2);
     [~,bestIdx] = min(scores);
     centers = normObj(bestIdx,:);
@@ -316,7 +301,6 @@ function chosen = ClusterSelect(normObj,clusterCount,remain)
         candidates(pos) = [];
     end
 
-    % Assign each individual to its nearest center
     assign = zeros(1,N);
     for i = 1:N
         [~,assign(i)] = min(sum((centers - normObj(i,:)).^2,2));
@@ -336,7 +320,6 @@ function chosen = ClusterSelect(normObj,clusterCount,remain)
         end
     end
 
-    % Fill remaining slots by maximising distance to current selections
     available = setdiff(1:N,chosen);
     while numel(chosen) < remain && ~isempty(available)
         dist = MinDistance(normObj(available,:),normObj(chosen,:));
