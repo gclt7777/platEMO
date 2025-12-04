@@ -33,8 +33,17 @@ end
 %% Optimization
 while Global.NotTermination(Archive)
     % Convergence optimization
-    for m = 1:Gloabl.M
-        Archive((m-1)*50+1:m*50) = ConvergenceOptimization(Archive((m-1)*50+1:m*50),subSet{m});
+    subPop = max(1,floor(length(Archive)/Global.M));
+    for m = 1:Global.M
+        start = (m-1)*subPop + 1;
+        if m == Global.M
+            range = start:length(Archive);
+        else
+            range = start:m*subPop;
+        end
+        if ~isempty(subSet{m})
+            Archive(range) = ConvergenceOptimization(Archive(range),subSet{m});
+        end
     end
     % Distribution optimization
     Archive = DistributionOptimization(Archive,DV,CXV);
