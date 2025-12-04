@@ -31,10 +31,10 @@ function Choose = Truncation(PopObj,K)
     PopObj = (PopObj-repmat(fmin,size(PopObj,1),1))./repmat(fmax-fmin,size(PopObj,1),1);
     Cosine = 1 - pdist2(PopObj,PopObj,'cosine');
     Cosine(logical(eye(length(Cosine)))) = 0;
-
+    
     %% Truncation
     % Choose the extreme solutions first
-    Choose = false(1,size(PopObj,1));
+    Choose = false(1,size(PopObj,1)); 
     [~,extreme] = max(PopObj,[],1);
     Choose(extreme) = true;
     % Choose the rest by truncation
