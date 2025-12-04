@@ -25,22 +25,30 @@ classdef LSMaODE < ALGORITHM
             Population = Problem.Initialization();
             lower      = Problem.lower;
             upper      = Problem.upper;
-            maxBudget  = Problem.maxFE;
+            %% Use the current evaluation budget from the platform
+            %  Do not cache it too early in case the GUI updates maxFE just
+            %  before execution. The inner loops will respect this budget.
 
             %% Optimization
             while Algorithm.NotTerminated(Population)
-                Problem.maxFE = maxBudget;
+                maxBudget  = Problem.maxFE;
+                stopSearch = false;
                 localgroup      = floor(proportion*Problem.N);
                 localPopulation = Population(1:localgroup);
                 L1list          = [];
                 for iter = 1 : 20 %#ok<NASGU>
+                    if stopSearch
+                        break;
+                    end
                     for i = 1 : Problem.N
-                        if Problem.FE >= maxBudget
+                        stopSearch = Problem.FE >= maxBudget;
+                        if stopSearch
                             break;
                         end
                         if i <= localgroup
                             for k = 1 : Problem.D
-                                if Problem.FE >= maxBudget
+                                stopSearch = Problem.FE >= maxBudget;
+                                if stopSearch
                                     break;
                                 end
                                 Parent         = Population(i);
@@ -76,7 +84,8 @@ classdef LSMaODE < ALGORITHM
                         end
 
                         if i > localgroup
-                            if Problem.FE >= maxBudget
+                            stopSearch = Problem.FE >= maxBudget;
+                            if stopSearch
                                 break;
                             end
                             Parent         = Population(i);
@@ -107,6 +116,9 @@ classdef LSMaODE < ALGORITHM
                     end
                 end
                 if terminate
+                    break;
+                end
+                if stopSearch
                     break;
                 end
             end
