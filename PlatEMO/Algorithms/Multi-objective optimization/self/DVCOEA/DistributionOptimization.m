@@ -1,5 +1,10 @@
-function Population = DistributionOptimization(Population,PV)
+function Population = DistributionOptimization(Population,PV,CXV)
 % Distribution optimization
+
+if nargin < 3
+    CXV = [];
+end
+PV = unique([PV,CXV]);
 
 N            = length(Population);
 OffDec       = Population(TournamentSelection(2,N,sum(Population.objs,2))).decs;
