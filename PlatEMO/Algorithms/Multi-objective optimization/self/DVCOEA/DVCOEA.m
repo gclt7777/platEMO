@@ -46,11 +46,11 @@ classdef DVCOEA < ALGORITHM
                         range = start:m*subPop;
                     end
                     if ~isempty(subSet{m})
-                        Archive(range) = ConvergenceOptimization(Archive(range),subSet{m});
+                        Archive(range) = ConvergenceOptimization(Problem,Archive(range),subSet{m});
                     end
                 end
                 % Distribution optimization
-                Archive = DistributionOptimization(Archive,DV,CXV);
+                Archive = DistributionOptimization(Problem,Archive,DV,CXV);
             end
         end
     end

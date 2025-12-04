@@ -1,4 +1,4 @@
-function Population = DistributionOptimization(Population,PV,CXV)
+function Population = DistributionOptimization(Problem,Population,PV,CXV)
 % Distribution optimization
 
 if nargin < 3
@@ -10,6 +10,6 @@ N            = length(Population);
 OffDec       = Population(TournamentSelection(2,N,sum(Population.objs,2))).decs;
 NewDec       = GA(Population(randi(N,1,N)).decs);
 OffDec(:,PV) = NewDec(:,PV);
-Offspring    = INDIVIDUAL(OffDec);
+Offspring    = Problem.Evaluation(OffDec);
 Population   = EnvironmentalSelection([Population,Offspring],N);
 end
