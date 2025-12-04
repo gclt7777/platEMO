@@ -1,57 +1,39 @@
-function CVSet = CorrelationAnalysis(Problem,Population,CV,nCor)
-% Detect the group of each convergence-related variable
-
-    CVSet = cell(0);
-    budgetExhausted = false;
-    for v = CV(:)'
-        if budgetExhausted
-            CVSet{end+1} = v; %#ok<AGROW>
-            continue;
-        end
-        related = [];
+function CVSet = CorrelationAnalysis(Global,Population,CV,nCor)
+% Detect the group of each distance variable  
+    CVSet = {};
+    for v = CV
+        RelatedSet = [];
         for d = 1 : length(CVSet)
-            group = CVSet{d};
-            sign  = false;
-            for u = group
+            for u = CVSet{d}
+                drawnow();
+                sign = false;
                 for i = 1 : nCor
-                    if Problem.maxFE - Problem.FE < 3
-                        budgetExhausted = true;
-                        break;
-                    end
                     p    = Population(randi(length(Population)));
-                    a2   = unifrnd(Problem.lower(v),Problem.upper(v));
-                    b2   = unifrnd(Problem.lower(u),Problem.upper(u));
+                    a2   = unifrnd(Global.lower(v),Global.upper(v));
+                    b2   = unifrnd(Global.lower(u),Global.upper(u));
                     decs = repmat(p.dec,3,1);
                     decs(1,v)     = a2;
                     decs(2,u)     = b2;
                     decs(3,[v,u]) = [a2,b2];
-                    F = Problem.Evaluation(decs);
-                    delta1 = F(1).objs - p.objs;
-                    delta2 = F(3).objs - F(2).objs;
+                    F = INDIVIDUAL(decs);
+                    delta1 = F(1).obj - p.obj;
+                    delta2 = F(3).obj - F(2).obj;
                     if any(delta1.*delta2<0)
                         sign = true;
-                        related = [related,d]; %#ok<AGROW>
+                        RelatedSet = [RelatedSet,d];
                         break;
                     end
                 end
                 if sign
                     break;
-                elseif budgetExhausted
-                    break;
                 end
             end
-            if budgetExhausted
-                break;
-            end
         end
-        if budgetExhausted
-            CVSet{end+1} = v; %#ok<AGROW>
-        elseif isempty(related)
-            CVSet{end+1} = v; %#ok<AGROW>
+        if isempty(RelatedSet)
+            CVSet = [CVSet,v];
         else
-            merged = unique([CVSet{related},v]);
-            CVSet(related) = [];
-            CVSet{end+1} = merged; %#ok<AGROW>
+            CVSet = [CVSet,[cell2mat(CVSet(RelatedSet)),v]];
+            CVSet(RelatedSet) = [];
         end
     end
 end
