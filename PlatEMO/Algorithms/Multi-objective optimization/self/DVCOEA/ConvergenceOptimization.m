@@ -1,7 +1,7 @@
 function [ Offspring ] = ConvergenceOptimization(Population,CVgroup )
 % 对spop中的CVgroup部分决策变量做优化
 [N,D] = size(Population.decs);
-Con   = sum(Population.objs);
+Con   = sum(Population.objs,2);
 % Select parents
 MatingPool = TournamentSelection(2,2*N,Con);
 % Generate offsprings
