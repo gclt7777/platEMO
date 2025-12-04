@@ -26,22 +26,14 @@ classdef LSMaODE < ALGORITHM
             lower      = Problem.lower;
             upper      = Problem.upper;
             % Cache the user-requested evaluation budget and pin it to the
-            % problem each generation so GUI operations (pause/resume) do not
-            % shrink the remaining evaluations.
-            targetBudget = Problem.maxFE;
+            % problem so GUI operations (pause/resume) do not shrink the
+            % remaining evaluations.
+            targetBudget  = Problem.maxFE;
+            Problem.maxFE = targetBudget;
 
             %% Optimization
-            while true
-                % Keep the budget consistent for this generation and exit if
-                % the budget has already been consumed.
+            while Algorithm.NotTerminated(Population) && Problem.FE < targetBudget
                 Problem.maxFE = targetBudget;
-                if Problem.FE >= targetBudget
-                    break;
-                end
-                % Call the platform termination hook once per generation to
-                % record progress and honor GUI controls without relying on
-                % external flags such as "terminate".
-                Algorithm.NotTerminated(Population);
                 localgroup      = floor(proportion*Problem.N);
                 localPopulation = Population(1:localgroup);
                 L1list          = [];
@@ -55,9 +47,9 @@ classdef LSMaODE < ALGORITHM
                                 if Problem.FE >= targetBudget
                                     break;
                                 end
-                                Parent         = Population(i);
-                                Offspring_dec  = Mutation(localgroup,i,k,Parent,lower,upper,mutationStrength,localPopulation,[]);
-                                Offspring      = Problem.Evaluation(Offspring_dec);
+                                Parent        = Population(i);
+                                Offspring_dec = Mutation(localgroup,i,k,Parent,lower,upper,mutationStrength,localPopulation,[]);
+                                Offspring     = Problem.Evaluation(Offspring_dec);
                                 mat_Population = [Parent,Offspring];
                                 [FrontNo,MaxFNo] = NDSort(mat_Population.objs,mat_Population.cons,2);
                                 if MaxFNo ~= 1
@@ -91,9 +83,9 @@ classdef LSMaODE < ALGORITHM
                             if Problem.FE >= targetBudget
                                 break;
                             end
-                            Parent         = Population(i);
-                            Offspring_dec  = Mutation(localgroup,i,[],Parent,lower,upper,mutationStrength,Population,L1list);
-                            Offspring      = Problem.Evaluation(Offspring_dec);
+                            Parent        = Population(i);
+                            Offspring_dec = Mutation(localgroup,i,[],Parent,lower,upper,mutationStrength,Population,L1list);
+                            Offspring     = Problem.Evaluation(Offspring_dec);
                             mat_Population = [Parent,Offspring];
                             [FrontNo,MaxFNo] = NDSort(mat_Population.objs,mat_Population.cons,2);
                             if MaxFNo ~= 1
