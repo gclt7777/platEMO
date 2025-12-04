@@ -18,7 +18,12 @@ OffDec = Population.decs;
 NewDec = DE(Population.decs,Population(MatingPool(1:end/2)).decs,...
     Population(MatingPool(end/2+1:end)).decs,...
     {1,0.5,max(1,D/length(CVgroup)/2),20});
-
+validMask  = CVgroup<=size(NewDec,2);
+CVgroup    = CVgroup(validMask);
+if isempty(CVgroup)
+    Offspring = Population;
+    return;
+end
 OffDec(:,CVgroup) = NewDec(:,CVgroup);
 Offspring = Problem.Evaluation(OffDec);
 end
