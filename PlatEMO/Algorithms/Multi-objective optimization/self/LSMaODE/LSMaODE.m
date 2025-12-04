@@ -27,14 +27,27 @@ classdef LSMaODE < ALGORITHM
             upper      = Problem.upper;
 
             %% Optimization
+            terminate = false;
             while Algorithm.NotTerminated(Population)
                 localgroup      = floor(proportion*Problem.N);
                 localPopulation = Population(1:localgroup);
                 L1list          = [];
                 for iter = 1 : 20 %#ok<NASGU>
+                    if Problem.FE >= Problem.maxFE
+                        terminate = true;
+                        break;
+                    end
                     for i = 1 : Problem.N
+                        if Problem.FE >= Problem.maxFE
+                            terminate = true;
+                            break;
+                        end
                         if i <= localgroup
                             for k = 1 : Problem.D
+                                if Problem.FE >= Problem.maxFE
+                                    terminate = true;
+                                    break;
+                                end
                                 Parent         = Population(i);
                                 Offspring_dec  = Mutation(localgroup,i,k,Parent,lower,upper,mutationStrength,localPopulation,[]);
                                 Offspring      = Problem.Evaluation(Offspring_dec);
@@ -68,6 +81,10 @@ classdef LSMaODE < ALGORITHM
                         end
 
                         if i > localgroup
+                            if Problem.FE >= Problem.maxFE
+                                terminate = true;
+                                break;
+                            end
                             Parent         = Population(i);
                             Offspring_dec  = Mutation(localgroup,i,[],Parent,lower,upper,mutationStrength,Population,L1list);
                             Offspring      = Problem.Evaluation(Offspring_dec);
@@ -91,6 +108,12 @@ classdef LSMaODE < ALGORITHM
                             end
                         end
                     end
+                    if terminate
+                        break;
+                    end
+                end
+                if terminate
+                    break;
                 end
             end
         end
