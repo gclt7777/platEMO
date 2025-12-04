@@ -31,30 +31,28 @@ classdef LSMaODE < ALGORITHM
             targetBudget = Problem.maxFE;
 
             %% Optimization
-            stopSearch = false;
-            while Algorithm.NotTerminated(Population)
+            while true
                 % Keep the budget consistent for this generation and exit if
                 % the budget has already been consumed.
                 Problem.maxFE = targetBudget;
                 if Problem.FE >= targetBudget
                     break;
                 end
+                % Call the platform termination hook once per generation to
+                % record progress and honor GUI controls without relying on
+                % external flags such as "terminate".
+                Algorithm.NotTerminated(Population);
                 localgroup      = floor(proportion*Problem.N);
                 localPopulation = Population(1:localgroup);
                 L1list          = [];
                 for iter = 1 : 20 %#ok<NASGU>
-                    if stopSearch
-                        break;
-                    end
                     for i = 1 : Problem.N
                         if Problem.FE >= targetBudget
-                            stopSearch = true;
                             break;
                         end
                         if i <= localgroup
                             for k = 1 : Problem.D
                                 if Problem.FE >= targetBudget
-                                    stopSearch = true;
                                     break;
                                 end
                                 Parent         = Population(i);
@@ -91,7 +89,6 @@ classdef LSMaODE < ALGORITHM
 
                         if i > localgroup
                             if Problem.FE >= targetBudget
-                                stopSearch = true;
                                 break;
                             end
                             Parent         = Population(i);
@@ -117,33 +114,9 @@ classdef LSMaODE < ALGORITHM
                             end
                         end
                     end
-                    if terminate
+                    if Problem.FE >= targetBudget
                         break;
                     end
-                end
-                if terminate
-                    break;
-                end
-                if stopSearch
-                    break;
-                end
-                if terminate
-                    break;
-                end
-                if stopSearch
-                    break;
-                end
-                if stopSearch
-                    break;
-                end
-                if stopSearch
-                    break;
-                end
-                if stopSearch
-                    break;
-                end
-                if stopSearch
-                    break;
                 end
             end
         end
