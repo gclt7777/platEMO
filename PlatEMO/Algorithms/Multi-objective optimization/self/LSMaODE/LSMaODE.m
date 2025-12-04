@@ -25,16 +25,20 @@ classdef LSMaODE < ALGORITHM
             Population = Problem.Initialization();
             lower      = Problem.lower;
             upper      = Problem.upper;
-            %% Use the current evaluation budget from the platform
-            %  Do not cache it too early in case the GUI updates maxFE just
-            %  before execution. The inner loops will respect this budget.
+            % Cache the user-requested evaluation budget and keep it stable in
+            % case the platform adjusts Problem.maxFE during execution (e.g.,
+            % when pausing/resuming). This prevents premature termination
+            % before reaching the intended number of evaluations.
+            targetBudget = Problem.maxFE;
 
             %% Optimization
             stopSearch = false;
             while ~stopSearch && Algorithm.NotTerminated(Population)
-                maxBudget = Problem.maxFE;
-                terminate = Problem.FE >= maxBudget;
-                if terminate
+                % Preserve the original budget for NotTerminated output and
+                % guarding inner loops.
+                Problem.maxFE = targetBudget;
+
+                if Problem.FE >= targetBudget
                     stopSearch = true;
                     break;
                 end
@@ -46,15 +50,13 @@ classdef LSMaODE < ALGORITHM
                         break;
                     end
                     for i = 1 : Problem.N
-                        terminate = Problem.FE >= maxBudget;
-                        if terminate
+                        if Problem.FE >= targetBudget
                             stopSearch = true;
                             break;
                         end
                         if i <= localgroup
                             for k = 1 : Problem.D
-                                terminate = Problem.FE >= maxBudget;
-                                if terminate
+                                if Problem.FE >= targetBudget
                                     stopSearch = true;
                                     break;
                                 end
@@ -91,8 +93,7 @@ classdef LSMaODE < ALGORITHM
                         end
 
                         if i > localgroup
-                            terminate = Problem.FE >= maxBudget;
-                            if terminate
+                            if Problem.FE >= targetBudget
                                 stopSearch = true;
                                 break;
                             end
@@ -130,6 +131,9 @@ classdef LSMaODE < ALGORITHM
                     break;
                 end
                 if terminate
+                    break;
+                end
+                if stopSearch
                     break;
                 end
                 if stopSearch
