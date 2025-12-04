@@ -30,28 +30,32 @@ classdef LSMaODE < ALGORITHM
             %  before execution. The inner loops will respect this budget.
 
             %% Optimization
-            while Algorithm.NotTerminated(Population)
+            stopSearch = false;
+            while ~stopSearch && Algorithm.NotTerminated(Population)
                 maxBudget = Problem.maxFE;
                 terminate = Problem.FE >= maxBudget;
                 if terminate
+                    stopSearch = true;
                     break;
                 end
                 localgroup      = floor(proportion*Problem.N);
                 localPopulation = Population(1:localgroup);
                 L1list          = [];
                 for iter = 1 : 20 %#ok<NASGU>
-                    if terminate
+                    if stopSearch
                         break;
                     end
                     for i = 1 : Problem.N
                         terminate = Problem.FE >= maxBudget;
                         if terminate
+                            stopSearch = true;
                             break;
                         end
                         if i <= localgroup
                             for k = 1 : Problem.D
                                 terminate = Problem.FE >= maxBudget;
                                 if terminate
+                                    stopSearch = true;
                                     break;
                                 end
                                 Parent         = Population(i);
@@ -89,6 +93,7 @@ classdef LSMaODE < ALGORITHM
                         if i > localgroup
                             terminate = Problem.FE >= maxBudget;
                             if terminate
+                                stopSearch = true;
                                 break;
                             end
                             Parent         = Population(i);
@@ -125,6 +130,9 @@ classdef LSMaODE < ALGORITHM
                     break;
                 end
                 if terminate
+                    break;
+                end
+                if stopSearch
                     break;
                 end
             end
