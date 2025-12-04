@@ -9,6 +9,11 @@ PV = unique([PV,CXV]);
 N            = length(Population);
 OffDec       = Population(TournamentSelection(2,N,sum(Population.objs,2))).decs;
 NewDec       = GA(Population(randi(N,1,N)).decs);
+[~,D]        = size(OffDec);
+PV           = PV(PV<=D);
+if isempty(PV)
+    return;
+end
 OffDec(:,PV) = NewDec(:,PV);
 Offspring    = Problem.Evaluation(OffDec);
 Population   = EnvironmentalSelection([Population,Offspring],N);
