@@ -119,6 +119,18 @@ classdef LSMaODE < ALGORITHM
                             end
                         end
                     end
+                    if terminate
+                        break;
+                    end
+                end
+                if terminate
+                    break;
+                end
+                if stopSearch
+                    break;
+                end
+                if terminate
+                    break;
                 end
                 if stopSearch
                     break;
