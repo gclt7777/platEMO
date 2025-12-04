@@ -25,22 +25,18 @@ classdef LSMaODE < ALGORITHM
             Population = Problem.Initialization();
             lower      = Problem.lower;
             upper      = Problem.upper;
-            % Cache the user-requested evaluation budget and keep it stable in
-            % case the platform adjusts Problem.maxFE during execution (e.g.,
-            % when pausing/resuming). This prevents premature termination
-            % before reaching the intended number of evaluations.
+            % Cache the user-requested evaluation budget and pin it to the
+            % problem each generation so GUI operations (pause/resume) do not
+            % shrink the remaining evaluations.
             targetBudget = Problem.maxFE;
-            Problem.maxFE = targetBudget;
 
             %% Optimization
             stopSearch = false;
             while Algorithm.NotTerminated(Population)
-                % Preserve the original budget for NotTerminated output and
-                % guarding inner loops.
+                % Keep the budget consistent for this generation and exit if
+                % the budget has already been consumed.
                 Problem.maxFE = targetBudget;
-
                 if Problem.FE >= targetBudget
-                    stopSearch = true;
                     break;
                 end
                 localgroup      = floor(proportion*Problem.N);
@@ -132,6 +128,9 @@ classdef LSMaODE < ALGORITHM
                     break;
                 end
                 if terminate
+                    break;
+                end
+                if stopSearch
                     break;
                 end
                 if stopSearch
