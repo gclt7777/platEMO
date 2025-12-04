@@ -30,19 +30,16 @@ classdef LSMaODE < ALGORITHM
             % when pausing/resuming). This prevents premature termination
             % before reaching the intended number of evaluations.
             targetBudget = Problem.maxFE;
+            Problem.maxFE = targetBudget;
 
             %% Optimization
             stopSearch = false;
-            while ~stopSearch
+            while Algorithm.NotTerminated(Population)
                 % Preserve the original budget for NotTerminated output and
                 % guarding inner loops.
                 Problem.maxFE = targetBudget;
 
-                % Track termination explicitly so GUI runs never see
-                % undefined flags when the budget is reached.
-                terminate = ~Algorithm.NotTerminated(Population);
-
-                if terminate || Problem.FE >= targetBudget
+                if Problem.FE >= targetBudget
                     stopSearch = true;
                     break;
                 end
@@ -50,14 +47,10 @@ classdef LSMaODE < ALGORITHM
                 localPopulation = Population(1:localgroup);
                 L1list          = [];
                 for iter = 1 : 20 %#ok<NASGU>
-                    if stopSearch || terminate
+                    if stopSearch
                         break;
                     end
                     for i = 1 : Problem.N
-                        if terminate
-                            stopSearch = true;
-                            break;
-                        end
                         if Problem.FE >= targetBudget
                             stopSearch = true;
                             break;
@@ -139,6 +132,9 @@ classdef LSMaODE < ALGORITHM
                     break;
                 end
                 if terminate
+                    break;
+                end
+                if stopSearch
                     break;
                 end
                 if stopSearch
