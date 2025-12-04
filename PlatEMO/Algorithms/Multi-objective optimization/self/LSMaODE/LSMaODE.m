@@ -25,27 +25,22 @@ classdef LSMaODE < ALGORITHM
             Population = Problem.Initialization();
             lower      = Problem.lower;
             upper      = Problem.upper;
+            maxBudget  = Problem.maxFE;
 
             %% Optimization
-            terminate = false;
             while Algorithm.NotTerminated(Population)
+                Problem.maxFE = maxBudget;
                 localgroup      = floor(proportion*Problem.N);
                 localPopulation = Population(1:localgroup);
                 L1list          = [];
                 for iter = 1 : 20 %#ok<NASGU>
-                    if Problem.FE >= Problem.maxFE
-                        terminate = true;
-                        break;
-                    end
                     for i = 1 : Problem.N
-                        if Problem.FE >= Problem.maxFE
-                            terminate = true;
+                        if Problem.FE >= maxBudget
                             break;
                         end
                         if i <= localgroup
                             for k = 1 : Problem.D
-                                if Problem.FE >= Problem.maxFE
-                                    terminate = true;
+                                if Problem.FE >= maxBudget
                                     break;
                                 end
                                 Parent         = Population(i);
@@ -81,8 +76,7 @@ classdef LSMaODE < ALGORITHM
                         end
 
                         if i > localgroup
-                            if Problem.FE >= Problem.maxFE
-                                terminate = true;
+                            if Problem.FE >= maxBudget
                                 break;
                             end
                             Parent         = Population(i);
