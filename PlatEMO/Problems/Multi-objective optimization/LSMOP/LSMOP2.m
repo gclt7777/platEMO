@@ -46,24 +46,16 @@ classdef LSMOP2 < PROBLEM
             PopDec(:,M:D) = (1+repmat((M:D)./D,N,1)).*PopDec(:,M:D) - repmat(PopDec(:,1)*10,1,D-M+1);
             G = zeros(N,M);
             for i = 1 : 2 : M
-                if obj.sublen(i) == 0
-                    continue;
-                end
                 for j = 1 : obj.nk
                     G(:,i) = G(:,i) + Griewank(PopDec(:,obj.len(i)+M-1+(j-1)*obj.sublen(i)+1:obj.len(i)+M-1+j*obj.sublen(i)));
                 end
             end
             for i = 2 : 2 : M
-                if obj.sublen(i) == 0
-                    continue;
-                end
                 for j = 1 : obj.nk
                     G(:,i) = G(:,i) + Schwefel(PopDec(:,obj.len(i)+M-1+(j-1)*obj.sublen(i)+1:obj.len(i)+M-1+j*obj.sublen(i)));
                 end
             end
-            sublen = obj.sublen;
-            sublen(sublen==0) = 1;
-            G      = G./repmat(sublen,N,1)./obj.nk;
+            G      = G./repmat(obj.sublen,N,1)./obj.nk;
             PopObj = (1+G).*fliplr(cumprod([ones(N,1),PopDec(:,1:M-1)],2)).*[ones(N,1),1-PopDec(:,M-1:-1:1)];
         end
         %% Generate points on the Pareto front
