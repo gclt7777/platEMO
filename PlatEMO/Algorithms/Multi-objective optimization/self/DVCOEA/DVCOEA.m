@@ -13,10 +13,13 @@ classdef DVCOEA < ALGORITHM
             % variable grouping can produce zero-length segments and trigger
             % indexing errors before the algorithm even starts. To keep the
             % DVCOEA pipeline robust without modifying the problem
-            % definitions, enforce a reasonable lower bound on the dimensional
-            % setting for LSMOP problems.
-            if contains(class(Problem),'LSMOP')
-                Problem.D = max(Problem.D,100*Problem.M);
+            % definitions, rebuild undersized LSMOP problems with a safe
+            % dimensionality while preserving user-specified settings.
+            if contains(class(Problem),'LSMOP') && Problem.D < 100*Problem.M
+                Problem = feval(class(Problem), ...
+                    'N',Problem.N,'M',Problem.M,'D',100*Problem.M, ...
+                    'maxFE',Problem.maxFE,'maxRuntime',Problem.maxRuntime, ...
+                    'parameter',Problem.parameter);
             end
             Archive = Problem.Initialization();
             %% 用于VariableCluster和CorrelationAnalysis
