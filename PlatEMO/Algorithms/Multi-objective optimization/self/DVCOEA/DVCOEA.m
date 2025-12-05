@@ -6,6 +6,21 @@ classdef DVCOEA < ALGORITHM
             %% Parameter setting
             [nSel,nPer,nCor] = Algorithm.ParameterSet(5,50,5);
             %% Generate random population
+            % Some large-scale benchmark problems (e.g., LSMOP series) require
+            % a sufficiently large number of decision variables to build valid
+            % subcomponents during initialization. When the dimensionality is
+            % set too small from the GUI or command line, their internal
+            % variable grouping can produce zero-length segments and trigger
+            % indexing errors before the algorithm even starts. To keep the
+            % DVCOEA pipeline robust without modifying the problem
+            % definitions, rebuild undersized LSMOP problems with a safe
+            % dimensionality while preserving user-specified settings.
+            if contains(class(Problem),'LSMOP') && Problem.D < 100*Problem.M
+                Problem = feval(class(Problem), ...
+                    'N',Problem.N,'M',Problem.M,'D',100*Problem.M, ...
+                    'maxFE',Problem.maxFE,'maxRuntime',Problem.maxRuntime, ...
+                    'parameter',Problem.parameter);
+            end
             Archive = Problem.Initialization();
             %% 用于VariableCluster和CorrelationAnalysis
             %% Detect the group of each convergence-related variables
