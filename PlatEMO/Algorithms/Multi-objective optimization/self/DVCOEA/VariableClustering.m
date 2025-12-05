@@ -1,4 +1,4 @@
-function [CV,DV,CO] = VariableClustering(Global,Population,nSel,nPer)
+function [CV,DV,CO] = VariableClustering(Problem,Population,nSel,nPer)
 % Detect the kind of each decision variable
    % 决策变量分类
 % CV:convergence-related variables;
@@ -24,8 +24,8 @@ function [CV,DV,CO] = VariableClustering(Global,Population,nSel,nPer)
         % Generate several random solutions by perturbing the i-th dimension
         Decs      = repmat(Population(Sample).decs,nPer,1);
         %创建随机的连续均匀分布的数组
-        Decs(:,i) = unifrnd(Global.lower(i),Global.upper(i),size(Decs,1),1); 
-        newPopu   = INDIVIDUAL(Decs);
+        Decs(:,i) = unifrnd(Problem.lower(i),Problem.upper(i),size(Decs,1),1);
+        newPopu   = Problem.Evaluation(Decs);
 %         newpop=newPopu.objs;
 %         plot3(newpop(:,1),newpop(:,2),newpop(:,3),'r*');
         for j = 1 : nSel
