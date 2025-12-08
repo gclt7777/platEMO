@@ -1,7 +1,12 @@
-function Population = DistributionOptimization(Population,PV)
+function Population = DistributionOptimization(Population,DV,CXV)
 % Distribution optimization
 
-N            = length(Population);
+    if nargin < 3
+        CXV = [];
+    end
+    PV = unique([DV,CXV]);
+
+    N            = length(Population);
 OffDec       = Population(TournamentSelection(2,N,sum(Population.objs,2))).decs;
 NewDec       = GA(Population(randi(N,1,N)).decs);
 OffDec(:,PV) = NewDec(:,PV);
