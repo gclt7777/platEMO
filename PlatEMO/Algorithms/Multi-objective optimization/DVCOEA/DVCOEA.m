@@ -41,10 +41,10 @@ classdef DVCOEA < ALGORITHM
             while Algorithm.NotTerminated(Archive)
                 % Convergence optimization
                 for m = 1:Problem.M
-                    Archive((m-1)*50+1:m*50) = ConvergenceOptimization(Archive((m-1)*50+1:m*50),subSet{m});
+                    Archive((m-1)*50+1:m*50) = ConvergenceOptimization(Problem,Archive((m-1)*50+1:m*50),subSet{m});
                 end
                 % Distribution optimization
-                Archive = DistributionOptimization(Archive,DV,CXV);
+                Archive = DistributionOptimization(Problem,Archive,DV,CXV);
             end
         end
     end

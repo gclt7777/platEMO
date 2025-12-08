@@ -1,5 +1,5 @@
-function [ Offspring ] = ConvergenceOptimization(Population,CVgroup )
-% 对spop中的CVgroup部分决策变量做优化
+function [ Offspring ] = ConvergenceOptimization(Problem,Population,CVgroup )
+Offspring = Problem.Evaluation(OffDec);
 [N,D] = size(Population.decs);
 Con   = sum(Population.objs);
 % Select parents
