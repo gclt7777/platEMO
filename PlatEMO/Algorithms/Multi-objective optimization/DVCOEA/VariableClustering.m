@@ -21,7 +21,7 @@ function [CV,DV,CO] = VariableClustering(Problem,Population,nSel,nPer)
         drawnow();
         Decs      = repmat(Population(Sample).decs,nPer,1);
         Decs(:,i) = unifrnd(Problem.lower(i),Problem.upper(i),size(Decs,1),1);
-        newPopu   = INDIVIDUAL(Decs);
+        newPopu   = Problem.Evaluation(Decs);
         for j = 1 : nSel
             Points = newPopu(j:nSel:end).objs;
             Points = (Points-repmat(fmin,size(Points,1),1))./repmat(fmax-fmin,size(Points,1),1);
