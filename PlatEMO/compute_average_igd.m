@@ -1,4 +1,4 @@
-function stats = compute_average_igd(resultDir,optimum,numRunsToAverage,outputCsvPath)
+function stats = compute_average_igd(resultDir,optimum,numRunsToAverage,outputCsvPath,filePattern)
 %COMPUTE_AVERAGE_IGD Compute the IGD statistics from a set of result files.
 %   STATS = COMPUTE_AVERAGE_IGD(RESULTDIR, OPTIMUM) loads all .mat files in
 %   RESULTDIR, extracts the objective values with LOAD_OBJS, and evaluates
@@ -16,6 +16,12 @@ function stats = compute_average_igd(resultDir,optimum,numRunsToAverage,outputCs
 %   IGD values (per run and the mean) to the CSV file specified by
 %   OUTPUTCSVPATH. Directories in OUTPUTCSVPATH are created automatically when
 %   needed.
+%
+%   STATS = COMPUTE_AVERAGE_IGD(..., OUTPUTCSVPATH, FILEPATTERN) restricts
+%   the processed files to those matching FILEPATTERN (default '*.mat'). This
+%   is useful when multiple problems are stored in the same RESULTDIR and you
+%   want to evaluate only a specific subset such as
+%   'RCCO_LSMOP1_M10_D1000_*.mat'.
 %
 %   Example:
 %       % Compute the mean IGD of the first 20 runs stored under Data/RCCO
@@ -35,9 +41,10 @@ function stats = compute_average_igd(resultDir,optimum,numRunsToAverage,outputCs
         optimum
         numRunsToAverage (1,1) double {mustBePositive,mustBeInteger} = inf
         outputCsvPath (1,:) char = ''
+        filePattern (1,:) char = '*.mat'
     end
 
-    files = dir(fullfile(resultDir,'*.mat'));
+    files = dir(fullfile(resultDir,filePattern));
     if isempty(files)
         error('No .mat files found in %s.',resultDir);
     end
