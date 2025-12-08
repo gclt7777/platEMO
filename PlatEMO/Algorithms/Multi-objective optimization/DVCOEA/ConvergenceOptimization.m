@@ -1,5 +1,4 @@
 function [ Offspring ] = ConvergenceOptimization(Problem,Population,CVgroup )
-Offspring = Problem.Evaluation(OffDec);
 [N,D] = size(Population.decs);
 Con   = sum(Population.objs);
 % Select parents
@@ -11,5 +10,5 @@ NewDec = DE(Population.decs,Population(MatingPool(1:end/2)).decs,...
     {1,0.5,D/length(CVgroup)/2,20});
 
 OffDec(:,CVgroup) = NewDec(:,CVgroup);
-Offspring = INDIVIDUAL(OffDec);
+Offspring = Problem.Evaluation(OffDec);
 end
