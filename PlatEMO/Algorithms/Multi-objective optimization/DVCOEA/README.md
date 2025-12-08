@@ -13,6 +13,12 @@ This folder contains the MATLAB implementation of the **Dimensionally-Varying Co
 1. Select **DVCOEA** from the algorithm list when setting up experiments in PlatEMO.
 2. Adjust `nSel`, `nPer`, and `nCor` via the algorithm parameters if different sampling or correlation sensitivity is desired.
 3. The algorithm assumes the problem definition provides appropriate bounds for all decision variables.
+4. The *variable clustering* and *correlation analysis* phases call `Problem.Evaluation` many times **before** the first `Algorithm.NotTerminated` check. On large-scale problems (e.g., LSMOP1 with `M=15`, `D=1500`, `nSel=5`, `nPer=50`), this preprocessing alone evaluates roughly `D × nSel × nPer ≈ 375,000` solutions, while `CorrelationAnalysis` can add several million more evaluations when many convergence-related variables are inter-correlated. As a result, the runtime IGD plot can show the function-evaluation axis far exceeding the user-set `maxFE` (e.g., >7e6 even when `maxFE=100000`) because the initial sampling consumes most of the evaluation budget before the main optimization loop begins.
+
+## 中文简介
+- DVCOEA通过扰动和聚类将决策变量划分为收敛相关变量（CV）和多样性相关变量（DV），并记录每个CV影响的目标集合（`CO`）。
+- 相关性分析会把高度相关的收敛变量合并，再分别用差分进化优化收敛组、用分布优化保持多样性。
+- 可在算法参数中调整`nSel`（扰动样本数）、`nPer`（扰动幅度）、`nCor`（相关性阈值）以适配不同问题特性。
 
 ## 中文简介
 - DVCOEA通过扰动和聚类将决策变量划分为收敛相关变量（CV）和多样性相关变量（DV），并记录每个CV影响的目标集合（`CO`）。
