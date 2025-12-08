@@ -1,4 +1,4 @@
-function CVSet = CorrelationAnalysis(Global,Population,CV,nCor)
+function CVSet = CorrelationAnalysis(Problem,Population,CV,nCor)
 % Detect the group of each distance variable  
     CVSet = {};
     for v = CV
@@ -9,8 +9,8 @@ function CVSet = CorrelationAnalysis(Global,Population,CV,nCor)
                 sign = false;
                 for i = 1 : nCor
                     p    = Population(randi(length(Population)));
-                    a2   = unifrnd(Global.lower(v),Global.upper(v));
-                    b2   = unifrnd(Global.lower(u),Global.upper(u));
+                    a2   = unifrnd(Problem.lower(v),Problem.upper(v));
+                    b2   = unifrnd(Problem.lower(u),Problem.upper(u));
                     decs = repmat(p.dec,3,1);
                     decs(1,v)     = a2;
                     decs(2,u)     = b2;
