@@ -1,6 +1,6 @@
 function [ Offspring ] = ConvergenceOptimization(Problem,Population,CVgroup )
 [N,D] = size(Population.decs);
-Con   = sum(Population.objs);
+Con   = sum(Population.objs,2);
 % Select parents
 MatingPool = TournamentSelection(2,2*N,Con);
 % Generate offsprings on the selected convergence-related variables
