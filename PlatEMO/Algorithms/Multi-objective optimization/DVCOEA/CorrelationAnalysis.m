@@ -1,6 +1,18 @@
-function CVSet = CorrelationAnalysis(Problem,Population,CV,nCor)
-% Detect the group of each distance variable  
+function CVSet = CorrelationAnalysis(Problem,Population,CV,nCor,maxBudget)
+% Detect the group of each distance variable
+    if nargin < 5
+        maxBudget = inf;
+    end
     CVSet = {};
+    % Limit the correlation tests based on the remaining evaluation budget.
+    remaining  = max(0,min(maxBudget,Problem.maxFE - Problem.FE));
+    if remaining <= 0 || isempty(CV)
+        return;
+    end
+    % Distribute the remaining budget evenly across the variables that need
+    % to be analyzed.
+    nCor = min(nCor,max(1,floor(remaining/max(1,length(CV))/3)));
+    startFE = Problem.FE;
     for v = CV
         RelatedSet = [];
         for d = 1 : length(CVSet)
@@ -8,6 +20,9 @@ function CVSet = CorrelationAnalysis(Problem,Population,CV,nCor)
                 drawnow();
                 sign = false;
                 for i = 1 : nCor
+                    if Problem.FE >= Problem.maxFE || Problem.FE - startFE >= maxBudget
+                        return;
+                    end
                     p    = Population(randi(length(Population)));
                     a2   = unifrnd(Problem.lower(v),Problem.upper(v));
                     b2   = unifrnd(Problem.lower(u),Problem.upper(u));

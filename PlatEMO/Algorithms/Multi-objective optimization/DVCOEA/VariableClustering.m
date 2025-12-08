@@ -1,9 +1,36 @@
-function [CV,DV,CO] = VariableClustering(Problem,Population,nSel,nPer)
+function [CV,DV,CO] = VariableClustering(Problem,Population,nSel,nPer,maxBudget)
 % Detect the type of each decision variable
 %
 % CV: convergence-related variables
 % DV: diversity-related variables
 % CO: objectives contributed by each CV
+
+    if nargin < 5
+        maxBudget = inf;
+    end
+    % Limit the sampling effort so that preprocessing cannot exhaust the
+    % evaluation budget.
+    remaining      = max(0,min(maxBudget,Problem.maxFE - Problem.FE));
+    if remaining <= 0
+        CV = [];
+        DV = 1:Problem.D;
+        CO = cell(1,Problem.D);
+        return;
+    end
+
+    % Cap the number of processed variables if the budget is too small to
+    % touch every dimension.
+    maxProcessVars = min(Problem.D,floor(remaining/max(1,nSel*nPer)));
+    if maxProcessVars == 0
+        CV = [];
+        DV = 1:Problem.D;
+        CO = cell(1,Problem.D);
+        return;
+    end
+    chosenVars   = randperm(Problem.D,maxProcessVars);
+    budgetPerVar = max(1,floor(remaining/maxProcessVars));
+    nSel         = min(nSel,max(1,floor(sqrt(budgetPerVar))));
+    nPer         = min(nPer,max(1,floor(budgetPerVar/nSel)));
 
     [N,D] = size(Population.decs);
     ND    = NDSort(Population.objs,1) == 1;
@@ -17,7 +44,13 @@ function [CV,DV,CO] = VariableClustering(Problem,Population,nSel,nPer)
     RMSE   = zeros(D,nSel);
     co     = zeros(D,nSel);
     Sample = randi(N,1,nSel);
-    for i = 1 : D
+    processed = false(1,D);
+    startFE   = Problem.FE;
+    for i = chosenVars
+        if Problem.FE >= Problem.maxFE || Problem.FE - startFE >= maxBudget
+            break;
+        end
+        processed(i) = true;
         drawnow();
         Decs      = repmat(Population(Sample).decs,nPer,1);
         Decs(:,i) = unifrnd(Problem.lower(i),Problem.upper(i),size(Decs,1),1);
@@ -39,8 +72,12 @@ function [CV,DV,CO] = VariableClustering(Problem,Population,nSel,nPer)
             Angle(i,j) = real(asin(sine)/pi*180);
         end
     end
-    VariableKind = (mean(RMSE,2)<1e-2)';
-    result       = kmeans(Angle,2,'emptyaction','singleton')';
+    VariableKind = false(1,D);
+    VariableKind(processed) = (mean(RMSE(processed,:),2)<1e-2)';
+    result       = zeros(1,D);
+    if any(processed)
+        result(processed) = kmeans(Angle(processed,:),2,'emptyaction','singleton')';
+    end
     if any(result(VariableKind)==1) && any(result(VariableKind)==2)
         if mean(mean(Angle(result==1&VariableKind,:))) > mean(mean(Angle(result==2&VariableKind,:)))
             VariableKind = VariableKind & result==1;
