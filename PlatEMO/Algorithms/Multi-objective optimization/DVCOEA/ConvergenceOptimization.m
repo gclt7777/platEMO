@@ -5,6 +5,10 @@ Con   = sum(Population.objs);
 MatingPool = TournamentSelection(2,2*N,Con);
 % Generate offsprings on the selected convergence-related variables
 OffDec = Population.decs;
+if isempty(CVgroup)
+    Offspring = Population;
+    return;
+end
 NewDec = OperatorDE(Problem,Population.decs,...
     Population(MatingPool(1:end/2)).decs,...
     Population(MatingPool(end/2+1:end)).decs,...
