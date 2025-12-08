@@ -14,9 +14,15 @@ classdef DVCOEA < ALGORITHM
             % ځ
             % CV:convergence-related variables;CO:contribute objectives of CV
             % DV:diversity-related variables
-            [CV,DV,CO] = VariableClustering(Problem,Archive,nSel,nPer);
+            % Allocate part of the evaluation budget to the preprocessing
+            % stages so they cannot consume the full maxFE before the
+            % first termination check.
+            clusterBudget = max(1,floor(Problem.maxFE*0.3));
+            corBudget     = max(1,floor(Problem.maxFE*0.2));
+
+            [CV,DV,CO] = VariableClustering(Problem,Archive,nSel,nPer,clusterBudget);
             % ༥÷õդځ
-            CVgroup = CorrelationAnalysis(Problem,Archive,CV,nCor);
+            CVgroup = CorrelationAnalysis(Problem,Archive,CV,nCor,corBudget);
             CXV = [];
             for i = 1:length(CVgroup)
                 if length(CVgroup{i}) > 1
