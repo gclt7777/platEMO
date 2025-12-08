@@ -40,8 +40,14 @@ classdef DVCOEA < ALGORITHM
             %% Optimization
             while Algorithm.NotTerminated(Archive)
                 % Convergence optimization
+                subPopSize = ceil(length(Archive)/Problem.M);
                 for m = 1:Problem.M
-                    Archive((m-1)*50+1:m*50) = ConvergenceOptimization(Problem,Archive((m-1)*50+1:m*50),subSet{m});
+                    startIdx = (m-1)*subPopSize + 1;
+                    if startIdx > length(Archive)
+                        break;
+                    end
+                    endIdx = min(m*subPopSize,length(Archive));
+                    Archive(startIdx:endIdx) = ConvergenceOptimization(Problem,Archive(startIdx:endIdx),subSet{m});
                 end
                 % Distribution optimization
                 Archive = DistributionOptimization(Problem,Archive,DV,CXV);
